@@ -1,61 +1,39 @@
 const pool = require('../config/db');
 const { createNotification } = require('../utils/notificationUtils');
 
+// ================= COURTS =================
+
 exports.createCourt = async (req, res) => {
   const { name, type, price_per_hour } = req.body;
 
-  await pool.query(
-    'INSERT INTO courts (name, type, price_per_hour, is_active) VALUES (?, ?, ?, 1)',
-    [name, type, price_per_hour]
-  );
+  try {
+    await pool.query(
+      'INSERT INTO courts (name, type, price_per_hour, is_active) VALUES (?, ?, ?, 1)',
+      [name, type, price_per_hour]
+    );
 
-  res.json({ message: 'Court created' });
+    res.json({ message: 'Court created' });
+  } catch (err) {
+    console.error("CREATE COURT ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
 };
 
 exports.updateCourt = async (req, res) => {
   const { id } = req.params;
   const { name, type, price_per_hour, is_active } = req.body;
 
-  await pool.query(
-    'UPDATE courts SET name=?, type=?, price_per_hour=?, is_active=? WHERE id=?',
-    [name, type, price_per_hour, is_active, id]
-  );
+  try {
+    await pool.query(
+      'UPDATE courts SET name=?, type=?, price_per_hour=?, is_active=? WHERE id=?',
+      [name, type, price_per_hour, is_active, id]
+    );
 
-  res.json({ message: 'Court updated' });
-};
-
-exports.getAllBookings = async (req, res) => {
-  const [rows] = await pool.query(`
-    SELECT b.*, u.email, c.name AS court_name
-    FROM bookings b
-    JOIN users u ON b.user_id = u.id
-    JOIN courts c ON b.court_id = c.id
-    ORDER BY b.created_at DESC
-  `);
-
-  res.json(rows);
-};
-
-exports.forceCancelBooking = async (req, res) => {
-  const { id } = req.params;
-
-  const [[booking]] = await pool.query(
-    'SELECT user_id FROM bookings WHERE id=?',
-    [id]
-  );
-
-  await pool.query(
-    "UPDATE bookings SET status='cancelled' WHERE id=?",
-    [id]
-  );
-
-  await createNotification(
-    booking.user_id,
-    'Booking Cancelled by Admin',
-    'Your booking was cancelled due to maintenance or event.'
-  );
-
-  res.json({ message: 'Booking cancelled by admin' });
+    res.json({ message: 'Court updated' });
+  } catch (err) {
+    console.error("UPDATE COURT ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
 };
 
 exports.getAllCourts = async (req, res) => {
@@ -65,25 +43,72 @@ exports.getAllCourts = async (req, res) => {
     );
     res.json(rows);
   } catch (err) {
+    console.error("GET COURTS ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
 
-exports.getHighDemandCourts = async (req, res) => {
+// ================= BOOKINGS =================
+
+exports.getAllBookings = async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT 
-        c.name AS court,
-        COUNT(b.id) AS total_bookings
+      SELECT b.*, u.email, c.name AS court_name
       FROM bookings b
+      JOIN users u ON b.user_id = u.id
       JOIN courts c ON b.court_id = c.id
-      WHERE b.status = 'confirmed'
-      GROUP BY b.court_id
-      ORDER BY total_bookings DESC
+      ORDER BY b.created_at DESC
     `);
 
     res.json(rows);
   } catch (err) {
+    console.error("GET BOOKINGS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.forceCancelBooking = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [[booking]] = await pool.query(
+      'SELECT user_id FROM bookings WHERE id=?',
+      [id]
+    );
+
+    await pool.query(
+      "UPDATE bookings SET status='cancelled' WHERE id=?",
+      [id]
+    );
+
+    await createNotification(
+      booking.user_id,
+      'Booking Cancelled by Admin',
+      'Your booking was cancelled due to maintenance or event.'
+    );
+
+    res.json({ message: 'Booking cancelled by admin' });
+  } catch (err) {
+    console.error("FORCE CANCEL ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ================= STATISTICS =================
+
+exports.highDemandCourts = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT c.type AS courtType, COUNT(b.id) AS count
+      FROM bookings b
+      JOIN courts c ON b.court_id = c.id
+      WHERE b.status = 'confirmed'
+      GROUP BY c.type
+    `);
+
+    res.json(rows);
+  } catch (err) {
+    console.error("HIGH DEMAND ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -102,6 +127,7 @@ exports.getPeakHours = async (req, res) => {
 
     res.json(rows);
   } catch (err) {
+    console.error("PEAK HOURS ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -121,6 +147,7 @@ exports.getCancellationRate = async (req, res) => {
 
     res.json({ rate });
   } catch (err) {
+    console.error("CANCELLATION RATE ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -139,18 +166,7 @@ exports.getRevenueTrend = async (req, res) => {
 
     res.json(rows);
   } catch (err) {
+    console.error("REVENUE ERROR:", err);
     res.status(500).json({ error: err.message });
   }
-};
-
-exports.highDemandCourts = async (req, res) => {
-  const [rows] = await pool.query(`
-    SELECT c.type AS courtType, COUNT(b.id) AS count
-    FROM bookings b
-    JOIN courts c ON b.court_id = c.id
-    WHERE b.status = 'booked'
-    GROUP BY c.type
-  `);
-
-  res.json(rows);
 };
