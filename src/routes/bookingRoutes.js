@@ -32,6 +32,7 @@ router.get('/my-bookings', auth, async (req, res) => {
   }
 });
 
+router.get('/:id', auth, bookingController.getBookingById);
 console.log('✅ bookingRoutes loaded');
 
 module.exports = router;
