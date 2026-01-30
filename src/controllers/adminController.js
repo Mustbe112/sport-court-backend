@@ -67,29 +67,139 @@ exports.getAllBookings = async (req, res) => {
   }
 };
 
-exports.forceCancelBooking = async (req, res) => {
+// NEW: CONFIRM BOOKING (Admin confirms when user arrives)
+exports.confirmBooking = async (req, res) => {
   const { id } = req.params;
 
   try {
     const [[booking]] = await pool.query(
-      'SELECT user_id FROM bookings WHERE id=?',
+      'SELECT user_id, status FROM bookings WHERE id=?',
       [id]
     );
 
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    if (booking.status !== 'booked') {
+      return res.status(400).json({ message: `Cannot confirm booking with status: ${booking.status}` });
+    }
+
     await pool.query(
-      "UPDATE bookings SET status='cancelled' WHERE id=?",
+      "UPDATE bookings SET status='confirmed', checked_in=1 WHERE id=?",
       [id]
     );
 
     await createNotification(
       booking.user_id,
-      'Booking Cancelled by Admin',
-      'Your booking was cancelled due to maintenance or event.'
+      'Booking Confirmed',
+      'Admin has confirmed your arrival. Enjoy your session!'
     );
 
-    res.json({ message: 'Booking cancelled by admin' });
+    res.json({ message: 'Booking confirmed successfully' });
   } catch (err) {
+    console.error("CONFIRM BOOKING ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// UPDATED: Force cancel with refund
+exports.forceCancelBooking = async (req, res) => {
+  const { id } = req.params;
+
+  const conn = await pool.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const [[booking]] = await conn.query(
+      'SELECT user_id, total_price, status FROM bookings WHERE id=?',
+      [id]
+    );
+
+    if (!booking) {
+      await conn.rollback();
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    if (booking.status === 'cancelled' || booking.status === 'completed') {
+      await conn.rollback();
+      return res.status(400).json({ message: 'Booking already cancelled or completed' });
+    }
+
+    await conn.query(
+      "UPDATE bookings SET status='cancelled' WHERE id=?",
+      [id]
+    );
+
+    // Refund coins
+    await conn.query(
+      `UPDATE users SET coin_balance = coin_balance + ? WHERE id = ?`,
+      [booking.total_price, booking.user_id]
+    );
+
+    await conn.commit();
+
+    await createNotification(
+      booking.user_id,
+      'Booking Cancelled by Admin',
+      'Your booking was cancelled due to maintenance or other reasons. Full refund issued.'
+    );
+
+    res.json({ message: 'Booking cancelled by admin, user refunded' });
+  } catch (err) {
+    await conn.rollback();
     console.error("FORCE CANCEL ERROR:", err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    conn.release();
+  }
+};
+
+// NEW: Complete booking (Admin marks as completed)
+exports.completeBooking = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [[booking]] = await pool.query(
+      'SELECT user_id, status, date, end_time FROM bookings WHERE id=?',
+      [id]
+    );
+
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    if (booking.status !== 'confirmed') {
+      return res.status(400).json({ message: 'Only confirmed bookings can be completed' });
+    }
+
+    // Check for late checkout
+    const bookingEnd = new Date(`${booking.date} ${booking.end_time}`);
+    const now = new Date();
+
+    if (now > new Date(bookingEnd.getTime() + 15 * 60000)) {
+      // Late checkout - apply penalty
+      await pool.query(
+        `UPDATE users SET penalty = penalty + 50 WHERE id = ?`,
+        [booking.user_id]
+      );
+
+      await createNotification(
+        booking.user_id,
+        'Late Checkout Penalty',
+        'A 50 coin penalty has been applied for late checkout.'
+      );
+    }
+
+    await pool.query(
+      "UPDATE bookings SET status='completed' WHERE id=?",
+      [id]
+    );
+
+    res.json({ message: 'Booking completed' });
+  } catch (err) {
+    console.error("COMPLETE BOOKING ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -99,11 +209,13 @@ exports.forceCancelBooking = async (req, res) => {
 exports.highDemandCourts = async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT c.type AS courtType, COUNT(b.id) AS count
+      SELECT c.name AS court_name, c.type AS courtType, COUNT(b.id) AS booking_count
       FROM bookings b
       JOIN courts c ON b.court_id = c.id
-      WHERE b.status = 'confirmed'
-      GROUP BY c.type
+      WHERE b.status IN ('confirmed', 'completed')
+      GROUP BY c.id
+      ORDER BY booking_count DESC
+      LIMIT 10
     `);
 
     res.json(rows);
@@ -118,9 +230,9 @@ exports.getPeakHours = async (req, res) => {
     const [rows] = await pool.query(`
       SELECT 
         HOUR(start_time) AS hour,
-        COUNT(*) AS total
+        COUNT(*) AS booking_count
       FROM bookings
-      WHERE status = 'confirmed'
+      WHERE status IN ('confirmed', 'completed')
       GROUP BY hour
       ORDER BY hour
     `);
@@ -159,9 +271,10 @@ exports.getRevenueTrend = async (req, res) => {
         DATE(created_at) AS date,
         SUM(total_price) AS revenue
       FROM bookings
-      WHERE status = 'confirmed'
+      WHERE status IN ('confirmed', 'completed', 'no_show')
       GROUP BY date
-      ORDER BY date
+      ORDER BY date DESC
+      LIMIT 7
     `);
 
     res.json(rows);
