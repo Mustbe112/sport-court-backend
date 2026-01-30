@@ -14,8 +14,6 @@ router.get('/courts', adminController.getAllCourts);
 
 // Booking management
 router.get('/bookings', adminController.getAllBookings);
-router.post('/bookings/:id/confirm', adminController.confirmBooking);  // NEW: Confirm booking
-router.post('/bookings/:id/complete', adminController.completeBooking); // NEW: Complete booking
 router.delete('/bookings/:id', adminController.forceCancelBooking);
 
 // Statistics

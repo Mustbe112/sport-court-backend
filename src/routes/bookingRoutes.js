@@ -10,10 +10,7 @@ router.post('/lock', auth, bookingController.lockSlot);
 router.post('/book', auth, bookingController.createBooking);
 router.post('/cancel/:id', auth, bookingController.cancelBooking);
 router.post('/checkout/:id', auth, bookingController.checkOut);
-
-// Auto no-show endpoint (can be called by cron job or manually)
-router.post('/auto-no-show', bookingController.autoNoShow);
-
+router.post('/auto-cancel', bookingController.autoCancelNoCheckIn);
 router.post('/confirm', bookingController.confirmBooking);
 router.post('/checkin/:id', auth, bookingController.checkIn);
 

@@ -13,7 +13,7 @@ exports.checkAvailability = async (req, res) => {
       `SELECT id FROM bookings
        WHERE court_id = ?
        AND date = ?
-       AND status IN ('booked', 'confirmed')
+       AND status = 'booked'
        AND start_time < ?
        AND end_time > ?`,
       [court_id, date, end_time, start_time]
@@ -84,7 +84,7 @@ exports.createBooking = async (req, res) => {
       `SELECT id FROM bookings
        WHERE court_id = ?
        AND date = ?
-       AND status IN ('booked', 'confirmed')
+       AND status = 'booked'
        AND start_time < ?
        AND end_time > ?`,
       [court_id, date, end_time, start_time]
@@ -122,8 +122,8 @@ exports.createBooking = async (req, res) => {
       [totalPrice, user_id]
     );
 
-    // create booking with status 'booked'
-    const [result] = await conn.query(
+    // create booking
+    await conn.query(
       `INSERT INTO bookings
        (user_id, court_id, date, start_time, end_time, status, total_price)
        VALUES (?, ?, ?, ?, ?, 'booked', ?)`,
@@ -138,18 +138,7 @@ exports.createBooking = async (req, res) => {
     );
 
     await conn.commit();
-    
-    // Send notification
-    await createNotification(
-      user_id,
-      'Booking Created',
-      'Your booking has been created. Please arrive on time and check in with admin.'
-    );
-    
-    res.json({ 
-      message: 'Booking created successfully',
-      bookingId: result.insertId
-    });
+    res.json({ message: 'Booking paid & confirmed' });
 
   } catch (err) {
     await conn.rollback();
@@ -174,13 +163,13 @@ exports.cancelBooking = async (req, res) => {
     const [[booking]] = await conn.query(
       `SELECT total_price
        FROM bookings
-       WHERE id = ? AND user_id = ? AND status IN ('booked', 'confirmed')`,
+       WHERE id = ? AND user_id = ? AND status = 'booked'`,
       [bookingId, user_id]
     );
 
     if (!booking) {
       await conn.rollback();
-      return res.status(404).json({ message: 'Booking not found or cannot be cancelled' });
+      return res.status(404).json({ message: 'Booking not found' });
     }
 
     // cancel booking
@@ -202,7 +191,7 @@ exports.cancelBooking = async (req, res) => {
     await createNotification(
       user_id,
       'Booking Cancelled',
-      'Your booking has been cancelled. Coins have been refunded.'
+      'Your booking has been cancelled.'
     );
     
     res.json({ message: 'Booking cancelled & refunded' });
@@ -225,12 +214,12 @@ exports.checkOut = async (req, res) => {
     const [[booking]] = await pool.query(
       `SELECT user_id, date, end_time
        FROM bookings
-       WHERE id = ? AND status = 'confirmed'`,
+       WHERE id = ? AND status = 'booked'`,
       [bookingId]
     );
 
     if (!booking) {
-      return res.status(404).json({ message: 'Booking not found or not confirmed' });
+      return res.status(404).json({ message: 'Booking not found' });
     }
 
     const bookingEnd = new Date(`${booking.date} ${booking.end_time}`);
@@ -241,12 +230,6 @@ exports.checkOut = async (req, res) => {
       await pool.query(
         `UPDATE users SET penalty = penalty + 50 WHERE id = ?`,
         [booking.user_id]
-      );
-      
-      await createNotification(
-        booking.user_id,
-        'Late Checkout Penalty',
-        'A 50 coin penalty has been applied for late checkout (>15 minutes).'
       );
     }
 
@@ -263,14 +246,15 @@ exports.checkOut = async (req, res) => {
 };
 
 /* ============================
-   6️⃣ AUTO NO-SHOW (15 MIN AFTER START)
+   6️⃣ AUTO CANCEL NO CHECK-IN
 ============================ */
-exports.autoNoShow = async (req, res) => {
+exports.autoCancelNoCheckIn = async (req, res) => {
   try {
     const [bookings] = await pool.query(
       `SELECT id, user_id, total_price
        FROM bookings
        WHERE status = 'booked'
+       AND checked_in = FALSE
        AND NOW() > DATE_ADD(
          CONCAT(date, ' ', start_time),
          INTERVAL 15 MINUTE
@@ -278,29 +262,30 @@ exports.autoNoShow = async (req, res) => {
     );
 
     for (const b of bookings) {
-      // Mark as no-show
+      // cancel booking
       await pool.query(
-        `UPDATE bookings SET status = 'no_show' WHERE id = ?`,
+        `UPDATE bookings SET status = 'cancelled' WHERE id = ?`,
         [b.id]
       );
 
-      // NO REFUND for no-show
-      // Optional: Apply additional penalty
+      // refund coins
       await pool.query(
-        `UPDATE users SET penalty = penalty + 20 WHERE id = ?`,
-        [b.user_id]
+        `UPDATE users
+         SET coin_balance = coin_balance + ?
+         WHERE id = ?`,
+        [b.total_price, b.user_id]
       );
 
       await createNotification(
         b.user_id,
-        'Booking Marked as No-Show',
-        'You did not check in within 15 minutes. Your booking has been marked as no-show. No refund will be issued.'
+        'Booking Auto Cancelled',
+        'You did not check in within 15 minutes. Penalty applied.'
       );
     }
 
     res.json({
-      message: 'Auto no-show executed',
-      marked: bookings.length
+      message: 'Auto cancel executed',
+      cancelled: bookings.length
     });
 
   } catch (err) {
@@ -309,7 +294,7 @@ exports.autoNoShow = async (req, res) => {
 };
 
 /* ============================
-   7️⃣ CONFIRM BOOKING (ADMIN ONLY - moved to adminController)
+   7️⃣ CONFIRM BOOKING + QR & PDF
 ============================ */
 exports.confirmBooking = async (req, res) => {
   const { bookingId } = req.body;
@@ -354,7 +339,7 @@ exports.confirmBooking = async (req, res) => {
 };
 
 /* ============================
-   8️⃣ CHECK-IN (Can be used by user or admin)
+   8️⃣ CHECK-IN
 ============================ */
 exports.checkIn = async (req, res) => {
   const bookingId = req.params.id;
@@ -362,21 +347,20 @@ exports.checkIn = async (req, res) => {
   try {
     const [result] = await pool.query(
       `UPDATE bookings
-       SET checked_in = 1, status = 'confirmed'
-       WHERE id = ? AND status = 'booked'`,
+       SET checked_in = 1
+       WHERE id = ? AND status = 'confirmed'`,
       [bookingId]
     );
 
     if (result.affectedRows === 0) {
-      return res.status(400).json({ message: 'Check-in failed or booking not found' });
+      return res.status(400).json({ message: 'Check-in failed' });
     }
 
-    res.json({ message: 'Check-in successful, booking confirmed' });
+    res.json({ message: 'Check-in successful' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
-
 /* ============================
    9️⃣ GET USER'S BOOKINGS
 ============================ */
