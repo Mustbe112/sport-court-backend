@@ -361,3 +361,69 @@ exports.checkIn = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+/* ============================
+   9️⃣ GET USER'S BOOKINGS
+============================ */
+exports.getUserBookings = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const [bookings] = await pool.query(`
+      SELECT 
+        b.id,
+        b.court_id,
+        b.date,
+        b.start_time,
+        b.end_time,
+        b.status,
+        b.total_price,
+        b.checked_in,
+        b.created_at,
+        c.name as court_name,
+        c.type as court_type,
+        c.location
+      FROM bookings b
+      LEFT JOIN courts c ON b.court_id = c.id
+      WHERE b.user_id = ?
+      ORDER BY b.date DESC, b.start_time DESC
+    `, [userId]);
+    
+    res.json(bookings);
+  } catch (error) {
+    console.error('Error fetching user bookings:', error);
+    res.status(500).json({ error: 'Failed to fetch bookings' });
+  }
+};
+
+/* ============================
+   🔟 GET SINGLE BOOKING (FOR RECEIPT)
+============================ */
+exports.getBookingById = async (req, res) => {
+  try {
+    const bookingId = req.params.id;
+    const userId = req.user.id;
+    
+    const [bookings] = await pool.query(`
+      SELECT 
+        b.*,
+        c.name as court_name,
+        c.type as court_type,
+        c.location,
+        c.price_per_hour,
+        u.email as user_email
+      FROM bookings b
+      LEFT JOIN courts c ON b.court_id = c.id
+      LEFT JOIN users u ON b.user_id = u.id
+      WHERE b.id = ? AND b.user_id = ?
+    `, [bookingId, userId]);
+    
+    if (bookings.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+    
+    res.json(bookings[0]);
+  } catch (error) {
+    console.error('Error fetching booking:', error);
+    res.status(500).json({ error: 'Failed to fetch booking' });
+  }
+};
