@@ -3,6 +3,7 @@ const router = express.Router();
 const auth = require('../middlewares/authMiddleware');
 const admin = require('../middlewares/adminMiddleware');
 const adminController = require('../controllers/adminController');
+const bookingController = require('../controllers/bookingController');
 
 router.use(auth);
 router.use(admin);
@@ -15,6 +16,9 @@ router.get('/courts', adminController.getAllCourts);
 // Booking management
 router.get('/bookings', adminController.getAllBookings);
 router.delete('/bookings/:id', adminController.forceCancelBooking);
+
+// NEW: Admin confirms booking via QR scan
+router.post('/bookings/:id/confirm', bookingController.confirmBooking);
 
 // Statistics
 router.get('/stats/high-demand', adminController.highDemandCourts);

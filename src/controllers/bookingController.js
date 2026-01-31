@@ -13,7 +13,7 @@ exports.checkAvailability = async (req, res) => {
       `SELECT id FROM bookings
        WHERE court_id = ?
        AND date = ?
-       AND status = 'booked'
+       AND status IN ('booked', 'confirmed')
        AND start_time < ?
        AND end_time > ?`,
       [court_id, date, end_time, start_time]
@@ -84,7 +84,7 @@ exports.createBooking = async (req, res) => {
       `SELECT id FROM bookings
        WHERE court_id = ?
        AND date = ?
-       AND status = 'booked'
+       AND status IN ('booked', 'confirmed')
        AND start_time < ?
        AND end_time > ?`,
       [court_id, date, end_time, start_time]
@@ -122,8 +122,8 @@ exports.createBooking = async (req, res) => {
       [totalPrice, user_id]
     );
 
-    // create booking
-    await conn.query(
+    // create booking with status='booked' (not confirmed yet)
+    const [result] = await conn.query(
       `INSERT INTO bookings
        (user_id, court_id, date, start_time, end_time, status, total_price)
        VALUES (?, ?, ?, ?, ?, 'booked', ?)`,
@@ -138,7 +138,17 @@ exports.createBooking = async (req, res) => {
     );
 
     await conn.commit();
-    res.json({ message: 'Booking paid & confirmed' });
+    
+    await createNotification(
+      user_id,
+      'Booking Created',
+      'Your booking has been created. Please check in on the day of your appointment.'
+    );
+    
+    res.json({ 
+      message: 'Booking paid & created',
+      booking_id: result.insertId
+    });
 
   } catch (err) {
     await conn.rollback();
@@ -161,15 +171,15 @@ exports.cancelBooking = async (req, res) => {
     await conn.beginTransaction();
 
     const [[booking]] = await conn.query(
-      `SELECT total_price
+      `SELECT total_price, status
        FROM bookings
-       WHERE id = ? AND user_id = ? AND status = 'booked'`,
+       WHERE id = ? AND user_id = ? AND status IN ('booked', 'confirmed')`,
       [bookingId, user_id]
     );
 
     if (!booking) {
       await conn.rollback();
-      return res.status(404).json({ message: 'Booking not found' });
+      return res.status(404).json({ message: 'Booking not found or cannot be cancelled' });
     }
 
     // cancel booking
@@ -191,7 +201,7 @@ exports.cancelBooking = async (req, res) => {
     await createNotification(
       user_id,
       'Booking Cancelled',
-      'Your booking has been cancelled.'
+      'Your booking has been cancelled and refunded.'
     );
     
     res.json({ message: 'Booking cancelled & refunded' });
@@ -214,12 +224,12 @@ exports.checkOut = async (req, res) => {
     const [[booking]] = await pool.query(
       `SELECT user_id, date, end_time
        FROM bookings
-       WHERE id = ? AND status = 'booked'`,
+       WHERE id = ? AND status = 'confirmed'`,
       [bookingId]
     );
 
     if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' });
+      return res.status(404).json({ message: 'Booking not found or not confirmed' });
     }
 
     const bookingEnd = new Date(`${booking.date} ${booking.end_time}`);
@@ -230,6 +240,12 @@ exports.checkOut = async (req, res) => {
       await pool.query(
         `UPDATE users SET penalty = penalty + 50 WHERE id = ?`,
         [booking.user_id]
+      );
+      
+      await createNotification(
+        booking.user_id,
+        'Late Checkout Penalty',
+        'You checked out late. A 50 coin penalty has been applied.'
       );
     }
 
@@ -246,9 +262,9 @@ exports.checkOut = async (req, res) => {
 };
 
 /* ============================
-   6️⃣ AUTO CANCEL NO CHECK-IN
+   6️⃣ AUTO NO-SHOW (15 MIN AFTER START)
 ============================ */
-exports.autoCancelNoCheckIn = async (req, res) => {
+exports.autoNoShow = async (req, res) => {
   try {
     const [bookings] = await pool.query(
       `SELECT id, user_id, total_price
@@ -262,30 +278,29 @@ exports.autoCancelNoCheckIn = async (req, res) => {
     );
 
     for (const b of bookings) {
-      // cancel booking
+      // mark as no-show
       await pool.query(
-        `UPDATE bookings SET status = 'cancelled' WHERE id = ?`,
+        `UPDATE bookings SET status = 'no_show' WHERE id = ?`,
         [b.id]
       );
 
-      // refund coins
+      // NO REFUND for no-show
+      // Apply penalty
       await pool.query(
-        `UPDATE users
-         SET coin_balance = coin_balance + ?
-         WHERE id = ?`,
-        [b.total_price, b.user_id]
+        `UPDATE users SET penalty = penalty + 100 WHERE id = ?`,
+        [b.user_id]
       );
 
       await createNotification(
         b.user_id,
-        'Booking Auto Cancelled',
-        'You did not check in within 15 minutes. Penalty applied.'
+        'No-Show Penalty',
+        'You did not check in for your booking. A 100 coin penalty has been applied and no refund issued.'
       );
     }
 
     res.json({
-      message: 'Auto cancel executed',
-      cancelled: bookings.length
+      message: 'Auto no-show executed',
+      no_shows: bookings.length
     });
 
   } catch (err) {
@@ -294,42 +309,48 @@ exports.autoCancelNoCheckIn = async (req, res) => {
 };
 
 /* ============================
-   7️⃣ CONFIRM BOOKING + QR & PDF
+   7️⃣ CONFIRM BOOKING (ADMIN CHECK-IN VIA QR)
 ============================ */
 exports.confirmBooking = async (req, res) => {
-  const { bookingId } = req.body;
+  const bookingId = req.params.id;
 
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM bookings WHERE id = ?",
+    const [[booking]] = await pool.query(
+      "SELECT * FROM bookings WHERE id = ? AND status = 'booked'",
       [bookingId]
     );
 
-    if (rows.length === 0) {
-      return res.status(404).json({ error: "Booking not found" });
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found or already confirmed" });
     }
 
-    const booking = rows[0];
+    // Check if it's the appointment date
+    const bookingDate = new Date(booking.date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    bookingDate.setHours(0, 0, 0, 0);
 
+    if (bookingDate.getTime() !== today.getTime()) {
+      return res.status(400).json({ error: "Can only confirm on the appointment date" });
+    }
+
+    // Generate QR code text
     const qrText = `BOOKING-${booking.id}`;
-    const qrCode = await generateQRCode(qrText);
-    const pdfReceipt = generatePDF(booking);
 
     await pool.query(
-      "UPDATE bookings SET status='confirmed', qr_code=? WHERE id=?",
+      "UPDATE bookings SET status='confirmed', checked_in=1, qr_code=? WHERE id=?",
       [qrText, booking.id]
     );
 
     await createNotification(
       booking.user_id,
       'Booking Confirmed',
-      `Your booking for court ${booking.court_id} is confirmed.`
+      `Your booking has been confirmed. Enjoy your game!`
     );
 
     res.json({
-      message: "Booking confirmed",
-      qr_code: qrCode,
-      pdf: pdfReceipt
+      message: "Booking confirmed - User checked in",
+      booking_id: booking.id
     });
 
   } catch (err) {
@@ -339,7 +360,7 @@ exports.confirmBooking = async (req, res) => {
 };
 
 /* ============================
-   8️⃣ CHECK-IN
+   8️⃣ CHECK-IN (DEPRECATED - Use confirmBooking instead)
 ============================ */
 exports.checkIn = async (req, res) => {
   const bookingId = req.params.id;
@@ -361,6 +382,7 @@ exports.checkIn = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
 /* ============================
    9️⃣ GET USER'S BOOKINGS
 ============================ */

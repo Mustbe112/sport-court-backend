@@ -10,8 +10,14 @@ router.post('/lock', auth, bookingController.lockSlot);
 router.post('/book', auth, bookingController.createBooking);
 router.post('/cancel/:id', auth, bookingController.cancelBooking);
 router.post('/checkout/:id', auth, bookingController.checkOut);
-router.post('/auto-cancel', bookingController.autoCancelNoCheckIn);
-router.post('/confirm', bookingController.confirmBooking);
+
+// CRON job endpoint (no auth needed for cron)
+router.post('/auto-no-show', bookingController.autoNoShow);
+
+// Admin endpoint for QR check-in (moved to admin routes - but keeping here for compatibility)
+router.post('/confirm/:id', bookingController.confirmBooking);
+
+// Deprecated check-in route
 router.post('/checkin/:id', auth, bookingController.checkIn);
 
 // GET USER'S OWN BOOKINGS

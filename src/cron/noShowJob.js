@@ -1,4 +1,4 @@
-// cron/autoNoShowJob.js
+// cron/noShowJob.js
 // This script should be run every 5-15 minutes to check for no-shows
 
 const cron = require('node-cron');
