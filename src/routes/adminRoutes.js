@@ -18,9 +18,9 @@ router.get('/bookings', adminController.getAllBookings);
 router.get('/bookings/pending', adminController.getPendingBookings);
 router.delete('/bookings/:id', adminController.forceCancelBooking);
 
-// Booking approval (handled by bookingController)
-router.post('/bookings/:id/approve', bookingController.approveBooking);
-router.post('/bookings/:id/reject', bookingController.rejectBooking);
+// 🔧 FIX: Remove these lines (they're duplicated in bookingRoutes)
+// router.post('/bookings/:id/approve', bookingController.approveBooking);
+// router.post('/bookings/:id/reject', bookingController.rejectBooking);
 
 // Admin notifications
 router.get('/notifications', adminController.getAdminNotifications);
