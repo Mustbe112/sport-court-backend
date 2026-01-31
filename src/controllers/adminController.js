@@ -67,6 +67,25 @@ exports.getAllBookings = async (req, res) => {
   }
 };
 
+// ✅ NEW: Get pending bookings for admin approval
+exports.getPendingBookings = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT b.*, u.email, c.name AS court_name
+      FROM bookings b
+      JOIN users u ON b.user_id = u.id
+      JOIN courts c ON b.court_id = c.id
+      WHERE b.status = 'booked' OR b.status = 'pending'
+      ORDER BY b.created_at DESC
+    `);
+
+    res.json(rows);
+  } catch (err) {
+    console.error("GET PENDING BOOKINGS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 // ✅ ENHANCED: Admin can now cancel both 'booked' AND 'confirmed' bookings with full refund
 exports.forceCancelBooking = async (req, res) => {
   const { id } = req.params;
@@ -126,16 +145,140 @@ exports.forceCancelBooking = async (req, res) => {
   }
 };
 
+// ================= ADMIN NOTIFICATIONS =================
+
+exports.getAdminNotifications = async (req, res) => {
+  try {
+    // Get system-wide notifications or admin-specific ones
+    const [rows] = await pool.query(`
+      SELECT * FROM notifications 
+      WHERE user_id IS NULL OR user_id = ?
+      ORDER BY created_at DESC
+      LIMIT 50
+    `, [req.user.id]);
+
+    res.json(rows);
+  } catch (err) {
+    console.error("GET ADMIN NOTIFICATIONS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.markNotificationRead = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await pool.query(
+      'UPDATE notifications SET is_read = 1 WHERE id = ?',
+      [id]
+    );
+
+    res.json({ message: 'Notification marked as read' });
+  } catch (err) {
+    console.error("MARK NOTIFICATION READ ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ================= PENALTIES =================
+
+exports.getAllPenalties = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT u.id, u.email, u.penalty, u.updated_at
+      FROM users u
+      WHERE u.penalty > 0
+      ORDER BY u.penalty DESC
+    `);
+
+    res.json(rows);
+  } catch (err) {
+    console.error("GET PENALTIES ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.resolvePenalty = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await pool.query(
+      'UPDATE users SET penalty = 0 WHERE id = ?',
+      [id]
+    );
+
+    res.json({ message: 'Penalty resolved' });
+  } catch (err) {
+    console.error("RESOLVE PENALTY ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 // ================= STATISTICS =================
+
+exports.getDashboardStats = async (req, res) => {
+  try {
+    // Get total revenue
+    const [[revenueData]] = await pool.query(`
+      SELECT COALESCE(SUM(total_price), 0) AS total_revenue
+      FROM bookings
+      WHERE status = 'confirmed' OR status = 'completed'
+    `);
+
+    // Get active bookings count
+    const [[activeData]] = await pool.query(`
+      SELECT COUNT(*) AS active_bookings
+      FROM bookings
+      WHERE status = 'confirmed'
+      AND date = CURDATE()
+    `);
+
+    // Get total courts
+    const [[courtsData]] = await pool.query(`
+      SELECT COUNT(*) AS total_courts
+      FROM courts
+      WHERE is_active = 1
+    `);
+
+    // Get cancellation rate
+    const [[cancelData]] = await pool.query(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(status = 'cancelled') AS cancelled
+      FROM bookings
+      WHERE MONTH(created_at) = MONTH(CURDATE())
+      AND YEAR(created_at) = YEAR(CURDATE())
+    `);
+
+    const cancellationRate = cancelData.total === 0
+      ? 0
+      : ((cancelData.cancelled / cancelData.total) * 100).toFixed(1);
+
+    res.json({
+      total_revenue: revenueData.total_revenue,
+      active_bookings: activeData.active_bookings,
+      total_courts: courtsData.total_courts,
+      cancellation_rate: cancellationRate
+    });
+  } catch (err) {
+    console.error("GET DASHBOARD STATS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
 
 exports.highDemandCourts = async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT c.type AS courtType, COUNT(b.id) AS count
+      SELECT 
+        c.name AS court_name,
+        c.type AS court_type,
+        COUNT(b.id) AS booking_count
       FROM bookings b
       JOIN courts c ON b.court_id = c.id
-      WHERE b.status = 'confirmed'
-      GROUP BY c.type
+      WHERE b.status = 'confirmed' OR b.status = 'completed'
+      GROUP BY c.id, c.name, c.type
+      ORDER BY booking_count DESC
+      LIMIT 10
     `);
 
     res.json(rows);
@@ -145,16 +288,17 @@ exports.highDemandCourts = async (req, res) => {
   }
 };
 
+// ✅ FIXED: GROUP BY uses full expression instead of alias
 exports.getPeakHours = async (req, res) => {
   try {
     const [rows] = await pool.query(`
       SELECT 
         HOUR(start_time) AS hour,
-        COUNT(*) AS total
+        COUNT(*) AS booking_count
       FROM bookings
-      WHERE status = 'confirmed'
-      GROUP BY hour
-      ORDER BY hour
+      WHERE status = 'confirmed' OR status = 'completed'
+      GROUP BY HOUR(start_time)
+      ORDER BY HOUR(start_time)
     `);
 
     res.json(rows);
@@ -184,6 +328,7 @@ exports.getCancellationRate = async (req, res) => {
   }
 };
 
+// ✅ FIXED: GROUP BY uses full expression instead of alias
 exports.getRevenueTrend = async (req, res) => {
   try {
     const [rows] = await pool.query(`
@@ -191,9 +336,10 @@ exports.getRevenueTrend = async (req, res) => {
         DATE(created_at) AS date,
         SUM(total_price) AS revenue
       FROM bookings
-      WHERE status = 'confirmed'
-      GROUP BY date
-      ORDER BY date
+      WHERE status = 'confirmed' OR status = 'completed'
+      GROUP BY DATE(created_at)
+      ORDER BY DATE(created_at)
+      LIMIT 30
     `);
 
     res.json(rows);
