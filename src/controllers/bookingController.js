@@ -266,8 +266,10 @@ exports.checkOut = async (req, res) => {
 ============================ */
 exports.autoNoShow = async (req, res) => {
   try {
+    console.log('🔍 Checking for no-shows at:', new Date().toISOString());
+    
     const [bookings] = await pool.query(
-      `SELECT id, user_id, total_price
+      `SELECT id, user_id, total_price, date, start_time, checked_in
        FROM bookings
        WHERE status = 'booked'
        AND checked_in = FALSE
@@ -277,7 +279,11 @@ exports.autoNoShow = async (req, res) => {
        )`
     );
 
+    console.log(`📊 Found ${bookings.length} no-show bookings`);
+
     for (const b of bookings) {
+      console.log(`⚠️ Marking booking #${b.id} as no-show`);
+      
       // mark as no-show
       await pool.query(
         `UPDATE bookings SET status = 'no_show' WHERE id = ?`,
@@ -296,14 +302,18 @@ exports.autoNoShow = async (req, res) => {
         'No-Show Penalty',
         'You did not check in for your booking. A 100 coin penalty has been applied and no refund issued.'
       );
+      
+      console.log(`✅ Booking #${b.id} marked as no-show, penalty applied`);
     }
 
     res.json({
       message: 'Auto no-show executed',
-      no_shows: bookings.length
+      no_shows: bookings.length,
+      bookings: bookings.map(b => ({ id: b.id, date: b.date, start_time: b.start_time }))
     });
 
   } catch (err) {
+    console.error('❌ Auto no-show error:', err);
     res.status(500).json({ error: err.message });
   }
 };
