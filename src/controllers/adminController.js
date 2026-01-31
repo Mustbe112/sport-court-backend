@@ -67,30 +67,62 @@ exports.getAllBookings = async (req, res) => {
   }
 };
 
+// ✅ ENHANCED: Admin can now cancel both 'booked' AND 'confirmed' bookings with full refund
 exports.forceCancelBooking = async (req, res) => {
   const { id } = req.params;
+  const conn = await pool.getConnection();
 
   try {
-    const [[booking]] = await pool.query(
-      'SELECT user_id FROM bookings WHERE id=?',
+    await conn.beginTransaction();
+
+    // Get booking details including status and price
+    const [[booking]] = await conn.query(
+      'SELECT user_id, total_price, status FROM bookings WHERE id=?',
       [id]
     );
 
-    await pool.query(
+    if (!booking) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    // Only allow cancellation of booked or confirmed bookings
+    if (!['booked', 'confirmed'].includes(booking.status)) {
+      await conn.rollback();
+      return res.status(400).json({ error: `Cannot cancel booking with status: ${booking.status}` });
+    }
+
+    // Update booking status to cancelled
+    await conn.query(
       "UPDATE bookings SET status='cancelled' WHERE id=?",
       [id]
     );
 
+    // Refund the user
+    await conn.query(
+      'UPDATE users SET coin_balance = coin_balance + ? WHERE id = ?',
+      [booking.total_price, booking.user_id]
+    );
+
+    await conn.commit();
+
+    // Send notification to user
     await createNotification(
       booking.user_id,
       'Booking Cancelled by Admin',
-      'Your booking was cancelled due to maintenance or event.'
+      `Your booking was cancelled due to maintenance or event. You have been fully refunded ${booking.total_price} coins.`
     );
 
-    res.json({ message: 'Booking cancelled by admin' });
+    res.json({ 
+      message: 'Booking cancelled by admin and user refunded',
+      refunded_amount: booking.total_price
+    });
   } catch (err) {
+    await conn.rollback();
     console.error("FORCE CANCEL ERROR:", err);
     res.status(500).json({ error: err.message });
+  } finally {
+    conn.release();
   }
 };
 
