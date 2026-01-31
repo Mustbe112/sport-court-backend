@@ -15,12 +15,23 @@ router.get('/courts', adminController.getAllCourts);
 
 // Booking management
 router.get('/bookings', adminController.getAllBookings);
+router.get('/bookings/pending', adminController.getPendingBookings);
 router.delete('/bookings/:id', adminController.forceCancelBooking);
 
-// NEW: Admin confirms booking via QR scan
-router.post('/bookings/:id/confirm', bookingController.confirmBooking);
+// Booking approval (handled by bookingController)
+router.post('/bookings/:id/approve', bookingController.approveBooking);
+router.post('/bookings/:id/reject', bookingController.rejectBooking);
+
+// Admin notifications
+router.get('/notifications', adminController.getAdminNotifications);
+router.post('/notifications/:id/read', adminController.markNotificationRead);
+
+// Penalties
+router.get('/penalties', adminController.getAllPenalties);
+router.post('/penalties/:id/resolve', adminController.resolvePenalty);
 
 // Statistics
+router.get('/stats/dashboard', adminController.getDashboardStats);
 router.get('/stats/high-demand', adminController.highDemandCourts);
 router.get('/stats/peak-hours', adminController.getPeakHours);
 router.get('/stats/cancellation-rate', adminController.getCancellationRate);

@@ -2,25 +2,29 @@ const express = require('express');
 const router = express.Router();
 const bookingController = require('../controllers/bookingController');
 const auth = require('../middlewares/authMiddleware');
+const adminMiddleware = require('../middlewares/adminMiddleware');
 const pool = require('../config/db');
 
-// protected routes
+// User endpoints
 router.post('/availability', auth, bookingController.checkAvailability);
-router.post('/lock', auth, bookingController.lockSlot);
 router.post('/book', auth, bookingController.createBooking);
 router.post('/cancel/:id', auth, bookingController.cancelBooking);
-router.post('/checkout/:id', auth, bookingController.checkOut);
 
-// CRON job endpoint (no auth needed for cron)
+// Admin approval endpoints
+router.post('/:id/approve', auth, adminMiddleware, bookingController.approveBooking);
+router.post('/:id/reject', auth, adminMiddleware, bookingController.rejectBooking);
+
+// QR validation
+router.post('/validate-qr', auth, bookingController.validateQR);
+
+// Cron job endpoints (no auth)
+router.post('/auto-complete', bookingController.autoCompleteBookings);
 router.post('/auto-no-show', bookingController.autoNoShow);
 
-// Admin endpoint for QR check-in (moved to admin routes - but keeping here for compatibility)
-router.post('/confirm/:id', bookingController.confirmBooking);
+// Penalty (admin only)
+router.post('/penalty', auth, adminMiddleware, bookingController.applyPenalty);
 
-// Deprecated check-in route
-router.post('/checkin/:id', auth, bookingController.checkIn);
-
-// GET USER'S OWN BOOKINGS
+// Get user's bookings
 router.get('/my-bookings', auth, async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -39,6 +43,7 @@ router.get('/my-bookings', auth, async (req, res) => {
 });
 
 router.get('/:id', auth, bookingController.getBookingById);
-console.log('✅ bookingRoutes loaded');
+
+console.log('✅ Enhanced bookingRoutes loaded');
 
 module.exports = router;
