@@ -3,8 +3,8 @@ const router = express.Router();
 const auth = require('../middlewares/authMiddleware');
 const admin = require('../middlewares/adminMiddleware');
 const adminController = require('../controllers/adminController');
-const bookingController = require('../controllers/bookingController');
 
+// Apply auth and admin middleware to ALL routes in this file
 router.use(auth);
 router.use(admin);
 
@@ -15,12 +15,8 @@ router.get('/courts', adminController.getAllCourts);
 
 // Booking management
 router.get('/bookings', adminController.getAllBookings);
-router.get('/bookings/pending', adminController.getPendingBookings);
+router.get('/bookings/pending', adminController.getPendingBookings);  // ✅ This must come BEFORE /bookings/:id
 router.delete('/bookings/:id', adminController.forceCancelBooking);
-
-// 🔧 FIX: Remove these lines (they're duplicated in bookingRoutes)
-// router.post('/bookings/:id/approve', bookingController.approveBooking);
-// router.post('/bookings/:id/reject', bookingController.rejectBooking);
 
 // Admin notifications
 router.get('/notifications', adminController.getAdminNotifications);
@@ -37,9 +33,9 @@ router.get('/stats/peak-hours', adminController.getPeakHours);
 router.get('/stats/cancellation-rate', adminController.getCancellationRate);
 router.get('/stats/revenue', adminController.getRevenueTrend);
 
-// Test
+// Test endpoint
 router.get('/test', (req, res) => {
-  res.json({ message: 'ADMIN ROUTES WORK' });
+  res.json({ message: 'ADMIN ROUTES WORK', user: req.user });
 });
 
 module.exports = router;
