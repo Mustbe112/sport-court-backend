@@ -16,6 +16,8 @@ router.get('/courts', adminController.getAllCourts);
 // Booking management
 router.get('/bookings', adminController.getAllBookings);
 router.get('/bookings/pending', adminController.getPendingBookings);  // ✅ This must come BEFORE /bookings/:id
+router.post('/bookings/:id/confirm', adminController.confirmBooking); // ✅ Confirm (check-in)
+router.delete('/bookings/noshow/:id', adminController.deleteNoShowBooking); // ✅ Delete no_show — MUST be before /bookings/:id
 router.delete('/bookings/:id', adminController.forceCancelBooking);
 
 // Admin notifications
