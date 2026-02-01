@@ -334,13 +334,16 @@ exports.confirmBooking = async (req, res) => {
       return res.status(404).json({ error: "Booking not found or already confirmed" });
     }
 
-    // Check if it's the appointment date
-    const bookingDate = new Date(booking.date);
+    // Compare as YYYY-MM-DD strings to avoid timezone shifts.
+    // new Date('2026-02-02') parses as UTC midnight, which shifts the local
+    // date on any non-UTC server (e.g. Bangkok UTC+7 becomes Feb 1).
+    const bookingDateStr = booking.date instanceof Date
+      ? booking.date.toISOString().slice(0, 10)
+      : String(booking.date).slice(0, 10);
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    bookingDate.setHours(0, 0, 0, 0);
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-    if (bookingDate.getTime() !== today.getTime()) {
+    if (bookingDateStr !== todayStr) {
       return res.status(400).json({ error: "Can only confirm on the appointment date" });
     }
 
