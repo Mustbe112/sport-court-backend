@@ -86,7 +86,7 @@ exports.getPendingBookings = async (req, res) => {
   }
 };
 
-// ✅ ENHANCED: Admin can now cancel both 'booked' AND 'confirmed' bookings with full refund
+// ✅ Admin can cancel 'booked' bookings only with full refund
 exports.forceCancelBooking = async (req, res) => {
   const { id } = req.params;
   const conn = await pool.getConnection();
@@ -105,8 +105,8 @@ exports.forceCancelBooking = async (req, res) => {
       return res.status(404).json({ error: 'Booking not found' });
     }
 
-    // Only allow cancellation of booked or confirmed bookings
-    if (!['booked', 'confirmed'].includes(booking.status)) {
+    // Only allow cancellation of booked bookings
+    if (booking.status !== 'booked') {
       await conn.rollback();
       return res.status(400).json({ error: `Cannot cancel booking with status: ${booking.status}` });
     }
