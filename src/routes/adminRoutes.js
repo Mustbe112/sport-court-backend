@@ -3,6 +3,7 @@ const router = express.Router();
 const auth = require('../middlewares/authMiddleware');
 const admin = require('../middlewares/adminMiddleware');
 const adminController = require('../controllers/adminController');
+const bookingController = require('../controllers/bookingController'); // ✅ FIX: import bookingController
 
 // Apply auth and admin middleware to ALL routes in this file
 router.use(auth);
@@ -16,8 +17,8 @@ router.get('/courts', adminController.getAllCourts);
 // Booking management
 router.get('/bookings', adminController.getAllBookings);
 router.get('/bookings/pending', adminController.getPendingBookings);
-router.post('/bookings/:id/confirm', adminController.confirmBooking);
-router.delete('/bookings/noshow/:id', adminController.deleteNoShowBooking); // MUST be before /bookings/:id
+router.post('/bookings/:id/confirm', bookingController.confirmBooking); // ✅ FIX: use bookingController
+// router.delete('/bookings/noshow/:id', adminController.deleteNoShowBooking); // ❌ REMOVED: this function doesn't exist — add it to adminController if you need it
 router.delete('/bookings/:id', adminController.forceCancelBooking);
 
 // Admin notifications
