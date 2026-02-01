@@ -39,17 +39,7 @@ router.get('/my-bookings', auth, async (req, res) => {
 });
 
 router.get('/:id', auth, bookingController.getBookingById);
-// Add these routes to bookingRoutes.js
 
-// CRON job endpoints (no auth needed for automated cron jobs)
-router.post('/auto-no-show', bookingController.autoNoShow);
-router.post('/auto-cancel-expired', bookingController.autoCancelExpired);
-router.post('/auto-complete', bookingController.autoComplete);
-
-// If you want to manually trigger these (with admin auth):
-// router.post('/auto-no-show', auth, admin, bookingController.autoNoShow);
-// router.post('/auto-cancel-expired', auth, admin, bookingController.autoCancelExpired);
-// router.post('/auto-complete', auth, admin, bookingController.autoComplete);
 console.log('✅ bookingRoutes loaded');
 
 module.exports = router;
