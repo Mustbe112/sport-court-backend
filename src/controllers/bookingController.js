@@ -459,3 +459,182 @@ exports.getBookingById = async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch booking' });
   }
 };
+exports.autoCancelExpired = async (req, res) => {
+  try {
+    console.log('🔍 Checking for expired bookings to auto-cancel at:', new Date().toISOString());
+    
+    // Find bookings that:
+    // 1. Status is 'booked' (never checked in)
+    // 2. Current time is past end_time
+    const [bookings] = await pool.query(
+      `SELECT id, user_id, total_price, date, start_time, end_time
+       FROM bookings
+       WHERE status = 'booked'
+       AND NOW() > CONCAT(date, ' ', end_time)
+       ORDER BY date, start_time`
+    );
+
+    console.log(`📊 Found ${bookings.length} expired bookings to auto-cancel`);
+
+    let cancelledCount = 0;
+
+    for (const booking of bookings) {
+      console.log(`🚫 Auto-cancelling booking #${booking.id} (${booking.date} ${booking.start_time}-${booking.end_time})`);
+      
+      try {
+        // Update booking status to cancelled
+        await pool.query(
+          "UPDATE bookings SET status='cancelled' WHERE id=?",
+          [booking.id]
+        );
+
+        // NO REFUND - User paid for the slot, court was reserved for them
+        // If they didn't show up, that's their loss
+
+        // Send notification
+        await createNotification(
+          booking.user_id,
+          'Booking Expired',
+          `Your booking on ${booking.date} has expired as you did not check in. The time slot was reserved for you. No refund issued.`
+        );
+
+        cancelledCount++;
+        
+        console.log(`✅ Booking #${booking.id} cancelled (NO REFUND - user paid for reserved slot)`);
+        
+      } catch (error) {
+        console.error(`❌ Failed to cancel booking #${booking.id}:`, error.message);
+      }
+    }
+
+    const summary = {
+      message: 'Auto-cancel expired bookings completed (no refunds)',
+      cancelled_count: cancelledCount,
+      bookings: bookings.map(b => ({
+        id: b.id,
+        date: b.date,
+        time: `${b.start_time}-${b.end_time}`,
+        amount_kept: b.total_price,
+        refunded: 0
+      }))
+    };
+
+    console.log('📈 Auto-cancel summary:', summary);
+    res.json(summary);
+
+  } catch (err) {
+    console.error('❌ Auto-cancel expired error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/* ============================
+   AUTO-COMPLETE CONFIRMED BOOKINGS
+   (Bookings that passed end_time + grace period)
+============================ */
+exports.autoComplete = async (req, res) => {
+  try {
+    console.log('🔍 Checking for bookings to auto-complete at:', new Date().toISOString());
+    
+    // Find bookings that:
+    // 1. Status is 'confirmed' (user checked in and is playing)
+    // 2. Current time is past end_time + 15 minute grace period
+    const [bookings] = await pool.query(
+      `SELECT id, user_id, date, start_time, end_time
+       FROM bookings
+       WHERE status = 'confirmed'
+       AND NOW() > DATE_ADD(
+         CONCAT(date, ' ', end_time),
+         INTERVAL 15 MINUTE
+       )
+       ORDER BY date, start_time`
+    );
+
+    console.log(`📊 Found ${bookings.length} bookings to auto-complete`);
+
+    let completedCount = 0;
+    let penaltiesApplied = 0;
+    let totalPenaltyAmount = 0;
+
+    for (const booking of bookings) {
+      const bookingEnd = new Date(`${booking.date} ${booking.end_time}`);
+      const now = new Date();
+      const gracePeriodEnd = new Date(bookingEnd.getTime() + 15 * 60000); // +15 minutes
+      
+      // Check if they're beyond grace period (late checkout)
+      const isLate = now > gracePeriodEnd;
+      
+      console.log(`✅ Auto-completing booking #${booking.id} (${booking.date} ${booking.start_time}-${booking.end_time})${isLate ? ' - LATE' : ''}`);
+      
+      const conn = await pool.getConnection();
+      
+      try {
+        await conn.beginTransaction();
+
+        // Update booking status to completed
+        await conn.query(
+          "UPDATE bookings SET status='completed' WHERE id=?",
+          [booking.id]
+        );
+
+        // Apply late penalty if beyond grace period
+        if (isLate) {
+          const minutesLate = Math.floor((now - gracePeriodEnd) / 60000);
+          const penaltyAmount = 50; // 50 coins penalty
+          
+          await conn.query(
+            'UPDATE users SET penalty = penalty + ? WHERE id = ?',
+            [penaltyAmount, booking.user_id]
+          );
+
+          await createNotification(
+            booking.user_id,
+            'Late Checkout - Auto-Completed',
+            `Your booking was automatically checked out ${minutesLate} minutes late. A ${penaltyAmount} coin penalty has been applied.`
+          );
+          
+          penaltiesApplied++;
+          totalPenaltyAmount += penaltyAmount;
+          
+          console.log(`⚠️ Applied ${penaltyAmount} coin penalty (${minutesLate} min late)`);
+        } else {
+          await createNotification(
+            booking.user_id,
+            'Booking Auto-Completed',
+            `Your booking has been automatically checked out. Thank you for using our courts!`
+          );
+        }
+
+        await conn.commit();
+        completedCount++;
+        
+        console.log(`✅ Booking #${booking.id} marked as completed`);
+        
+      } catch (error) {
+        await conn.rollback();
+        console.error(`❌ Failed to complete booking #${booking.id}:`, error.message);
+      } finally {
+        conn.release();
+      }
+    }
+
+    const summary = {
+      message: 'Auto-complete bookings completed',
+      completed_count: completedCount,
+      penalties_applied: penaltiesApplied,
+      total_penalty_amount: totalPenaltyAmount,
+      bookings: bookings.map(b => ({
+        id: b.id,
+        date: b.date,
+        time: `${b.start_time}-${b.end_time}`
+      }))
+    };
+
+    console.log('📈 Auto-complete summary:', summary);
+    res.json(summary);
+
+  } catch (err) {
+    console.error('❌ Auto-complete error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
