@@ -86,7 +86,7 @@ exports.getPendingBookings = async (req, res) => {
   }
 };
 
-// ✅ ENHANCED: Admin can now cancel both 'booked' AND 'confirmed' bookings with full refund
+// ✅ Admin can cancel 'booked' bookings only with full refund
 exports.forceCancelBooking = async (req, res) => {
   const { id } = req.params;
   const conn = await pool.getConnection();
@@ -105,8 +105,8 @@ exports.forceCancelBooking = async (req, res) => {
       return res.status(404).json({ error: 'Booking not found' });
     }
 
-    // Only allow cancellation of booked or confirmed bookings
-    if (!['booked', 'confirmed'].includes(booking.status)) {
+    // Only allow cancellation of booked bookings
+    if (booking.status !== 'booked') {
       await conn.rollback();
       return res.status(400).json({ error: `Cannot cancel booking with status: ${booking.status}` });
     }
@@ -176,6 +176,77 @@ exports.markNotificationRead = async (req, res) => {
     res.json({ message: 'Notification marked as read' });
   } catch (err) {
     console.error("MARK NOTIFICATION READ ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ✅ NEW: Delete no_show booking record
+exports.deleteNoShowBooking = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [[booking]] = await pool.query(
+      'SELECT status FROM bookings WHERE id = ?',
+      [id]
+    );
+
+    if (!booking) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    if (booking.status !== 'no_show') {
+      return res.status(400).json({ error: 'Only no_show bookings can be deleted' });
+    }
+
+    await pool.query('DELETE FROM bookings WHERE id = ?', [id]);
+
+    res.json({ message: 'No-show booking deleted' });
+  } catch (err) {
+    console.error("DELETE NO_SHOW ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ✅ NEW: Confirm booking (admin check-in)
+exports.confirmBooking = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [[booking]] = await pool.query(
+      "SELECT * FROM bookings WHERE id = ? AND status = 'booked'",
+      [id]
+    );
+
+    if (!booking) {
+      return res.status(404).json({ error: 'Booking not found or already confirmed' });
+    }
+
+    const bookingDate = new Date(booking.date);
+    const today = new Date();
+    bookingDate.setHours(0, 0, 0, 0);
+    today.setHours(0, 0, 0, 0);
+
+    // Only prevent confirming past bookings, allow future bookings
+    if (bookingDate.getTime() < today.getTime()) {
+      return res.status(400).json({ error: 'Cannot confirm past bookings' });
+    }
+
+    const qrText = `BOOKING-${booking.id}`;
+
+    await pool.query(
+      "UPDATE bookings SET status='confirmed', checked_in=1, qr_code=? WHERE id=?",
+      [qrText, booking.id]
+    );
+
+    await createNotification(
+      booking.user_id,
+      'Booking Confirmed',
+      `Your booking has been confirmed. Enjoy your game!`
+    );
+
+    res.json({ message: 'Booking confirmed - User checked in', booking_id: booking.id });
+  } catch (err) {
+    console.error("CONFIRM BOOKING ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
