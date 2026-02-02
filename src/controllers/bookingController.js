@@ -107,7 +107,13 @@ exports.createBooking = async (req, res) => {
       [user_id]
     );
 
-    const totalPrice = court.price_per_hour + user.penalty;
+    // Calculate duration in hours
+    const startTime = new Date(`1970-01-01 ${start_time}`);
+    const endTime = new Date(`1970-01-01 ${end_time}`);
+    const durationHours = (endTime - startTime) / (1000 * 60 * 60);
+    
+    // Calculate total price: (price per hour × hours) + penalty
+    const totalPrice = (court.price_per_hour * durationHours) + user.penalty;
 
     if (user.coin_balance < totalPrice) {
       await conn.rollback();
