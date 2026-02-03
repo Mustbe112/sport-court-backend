@@ -9,6 +9,7 @@ exports.checkAvailability = async (req, res) => {
   const { court_id, date, start_time, end_time } = req.body;
 
   try {
+    // Check for existing bookings
     const [conflicts] = await pool.query(
       `SELECT id FROM bookings
        WHERE court_id = ?
@@ -20,7 +21,23 @@ exports.checkAvailability = async (req, res) => {
     );
 
     if (conflicts.length > 0) {
-      return res.json({ available: false });
+      return res.json({ available: false, reason: 'Time slot already booked' });
+    }
+
+    // ✅ Check for maintenance periods
+    const [maintenance] = await pool.query(
+      `SELECT id, reason FROM court_maintenance
+       WHERE court_id = ?
+       AND ? BETWEEN start_date AND end_date`,
+      [court_id, date]
+    );
+
+    if (maintenance.length > 0) {
+      return res.json({ 
+        available: false, 
+        reason: 'Court under maintenance',
+        maintenance_reason: maintenance[0].reason
+      });
     }
 
     res.json({ available: true });
@@ -93,6 +110,22 @@ exports.createBooking = async (req, res) => {
     if (conflicts.length > 0) {
       await conn.rollback();
       return res.status(400).json({ message: 'Time slot not available' });
+    }
+
+    // ✅ Check for maintenance during booking creation
+    const [maintenance] = await conn.query(
+      `SELECT id, reason FROM court_maintenance
+       WHERE court_id = ?
+       AND ? BETWEEN start_date AND end_date`,
+      [court_id, date]
+    );
+
+    if (maintenance.length > 0) {
+      await conn.rollback();
+      return res.status(400).json({ 
+        message: 'Court is under maintenance during this period',
+        maintenance_reason: maintenance[0].reason
+      });
     }
 
     // court price
