@@ -14,27 +14,61 @@ exports.getMyNotifications = async (req, res) => {
 
 // mark as read
 exports.markAsRead = async (req, res) => {
-  const { id } = req.params;
-  const userId = req.user.id;
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
 
-  await pool.query(
-    'UPDATE notifications SET is_read=1 WHERE id=? AND user_id=?',
-    [id, userId]
-  );
+    console.log('markAsRead - ID:', id, 'User:', userId);
 
-  res.json({ message: 'Notification marked as read' });
+    const [result] = await pool.query(
+      'UPDATE notifications SET is_read=1 WHERE id=? AND user_id=?',
+      [id, userId]
+    );
+
+    console.log('Update result:', result);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ 
+        error: 'Notification not found or already marked as read' 
+      });
+    }
+
+    res.json({ message: 'Notification marked as read', success: true });
+  } catch (error) {
+    console.error('Error in markAsRead:', error);
+    res.status(500).json({ 
+      error: 'Failed to mark notification as read',
+      details: error.message 
+    });
+  }
 };
 
 // mark all as read
 exports.markAllAsRead = async (req, res) => {
-  const userId = req.user.id;
+  try {
+    const userId = req.user.id;
 
-  await pool.query(
-    'UPDATE notifications SET is_read=1 WHERE user_id=? AND is_read=0',
-    [userId]
-  );
+    console.log('markAllAsRead - User:', userId);
 
-  res.json({ message: 'All notifications marked as read' });
+    const [result] = await pool.query(
+      'UPDATE notifications SET is_read=1 WHERE user_id=? AND is_read=0',
+      [userId]
+    );
+
+    console.log('Update all result:', result);
+
+    res.json({ 
+      message: 'All notifications marked as read', 
+      success: true,
+      updated: result.affectedRows 
+    });
+  } catch (error) {
+    console.error('Error in markAllAsRead:', error);
+    res.status(500).json({ 
+      error: 'Failed to mark all notifications as read',
+      details: error.message 
+    });
+  }
 };
 
 // delete notification
