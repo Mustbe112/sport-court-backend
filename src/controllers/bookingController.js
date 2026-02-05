@@ -24,7 +24,7 @@ exports.checkAvailability = async (req, res) => {
       return res.json({ available: false, reason: 'Time slot already booked' });
     }
 
-    // Check for maintenance periods
+    // ⭐ Check for maintenance periods
     const [maintenance] = await pool.query(
       `SELECT id, reason FROM court_maintenance
        WHERE court_id = ?
@@ -110,6 +110,22 @@ exports.createBooking = async (req, res) => {
     if (conflicts.length > 0) {
       await conn.rollback();
       return res.status(400).json({ message: 'Time slot not available' });
+    }
+
+    // ⭐ Check for maintenance
+    const [maintenance] = await conn.query(
+      `SELECT id, reason FROM court_maintenance
+       WHERE court_id = ?
+       AND ? BETWEEN start_date AND end_date`,
+      [court_id, date]
+    );
+
+    if (maintenance.length > 0) {
+      await conn.rollback();
+      return res.status(400).json({ 
+        message: 'Court under maintenance', 
+        reason: maintenance[0].reason 
+      });
     }
 
     // court price
