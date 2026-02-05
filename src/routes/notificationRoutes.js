@@ -1,13 +1,16 @@
 // routes/notificationRoutes.js
 
-const router = require('express').Router();
+const express = require('express');
+const router = express.Router();
 const notificationController = require('../controllers/notificationController');
+const auth = require('../middlewares/authMiddleware');
 
-// COPY THIS LINE FROM YOUR WORKING ROUTE FILE (e.g., bookingRoutes.js)
-const { authMiddleware } = require('../middlewares/auth');  // ← Use the EXACT import from your other files
+// IMPORTANT: Place /read-all BEFORE /:id/read
+// Otherwise Express will treat "read-all" as an ID parameter
+router.put('/read-all', auth, notificationController.markAllAsRead);
+router.get('/', auth, notificationController.getMyNotifications);
+router.put('/:id/read', auth, notificationController.markAsRead);
 
-router.put('/read-all', authMiddleware, notificationController.markAllAsRead);
-router.get('/', authMiddleware, notificationController.getMyNotifications);
-router.put('/:id/read', authMiddleware, notificationController.markAsRead);
+console.log('✅ notificationRoutes loaded');
 
 module.exports = router;
