@@ -419,3 +419,103 @@ exports.getRevenueTrend = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+// ================= MAINTENANCE =================
+
+exports.scheduleMaintenance = async (req, res) => {
+  const { id } = req.params;
+  const { start_date, end_date, reason } = req.body;
+
+  try {
+    // Validate dates
+    if (!start_date || !end_date) {
+      return res.status(400).json({ error: 'Start and end dates are required' });
+    }
+
+    // Insert maintenance schedule
+    await pool.query(
+      `INSERT INTO court_maintenance (court_id, start_date, end_date, reason)
+       VALUES (?, ?, ?, ?)`,
+      [id, start_date, end_date, reason]
+    );
+
+    // Get affected bookings
+    const [affectedBookings] = await pool.query(
+      `SELECT b.id, b.user_id, b.total_price
+       FROM bookings b
+       WHERE b.court_id = ?
+       AND b.date BETWEEN ? AND ?
+       AND b.status = 'booked'`,
+      [id, start_date, end_date]
+    );
+
+    // Cancel and refund affected bookings
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      for (const booking of affectedBookings) {
+        // Cancel booking
+        await conn.query(
+          `UPDATE bookings SET status = 'cancelled' WHERE id = ?`,
+          [booking.id]
+        );
+
+        // Refund user
+        await conn.query(
+          `UPDATE users SET coin_balance = coin_balance + ? WHERE id = ?`,
+          [booking.total_price, booking.user_id]
+        );
+
+        // Notify user
+        await createNotification(
+          booking.user_id,
+          'Booking Cancelled - Court Maintenance',
+          `Your booking has been cancelled due to scheduled maintenance. You have been fully refunded ${booking.total_price} coins.`
+        );
+      }
+
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    res.json({ 
+      message: 'Maintenance scheduled successfully',
+      affected_bookings: affectedBookings.length
+    });
+  } catch (err) {
+    console.error("SCHEDULE MAINTENANCE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getCourtMaintenance = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT cm.*, c.name as court_name
+      FROM court_maintenance cm
+      JOIN courts c ON cm.court_id = c.id
+      ORDER BY cm.start_date DESC
+    `);
+    
+    res.json(rows);
+  } catch (err) {
+    console.error("GET MAINTENANCE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.deleteMaintenance = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await pool.query('DELETE FROM court_maintenance WHERE id = ?', [id]);
+    res.json({ message: 'Maintenance schedule deleted' });
+  } catch (err) {
+    console.error("DELETE MAINTENANCE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};

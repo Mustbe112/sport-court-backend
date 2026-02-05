@@ -36,6 +36,10 @@ router.get('/stats/peak-hours', adminController.getPeakHours);
 router.get('/stats/cancellation-rate', adminController.getCancellationRate);
 router.get('/stats/revenue', adminController.getRevenueTrend);
 
+// Maintenance management (add this after court management section)
+router.post('/courts/:id/maintenance', adminController.scheduleMaintenance);
+router.get('/maintenance', adminController.getCourtMaintenance);
+router.delete('/maintenance/:id', adminController.deleteMaintenance);
 // Test endpoint
 router.get('/test', (req, res) => {
   res.json({ message: 'ADMIN ROUTES WORK', user: req.user });
