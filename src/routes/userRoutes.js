@@ -44,7 +44,7 @@ router.post("/topup", auth, async (req, res) => {
 router.get("/me", auth, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      "SELECT id, email, coin_balance FROM users WHERE id = ?",
+      "SELECT id, username, email, coin_balance FROM users WHERE id = ?",
       [req.user.id]
     );
 
