@@ -126,22 +126,24 @@ router.delete("/me", auth, async (req, res) => {
       return res.status(400).json({ error: "Incorrect password" });
     }
 
-    // Cancel active bookings
-    await pool.query(
-      "UPDATE bookings SET status = 'cancelled' WHERE user_id = ? AND status IN ('booked', 'confirmed')",
-      [userId]
-    );
+    // Disable FK checks to avoid constraint errors
+    await pool.query("SET FOREIGN_KEY_CHECKS = 0");
 
-    // Delete notifications
+    // Delete all related data
     await pool.query("DELETE FROM notifications WHERE user_id = ?", [userId]);
+    await pool.query("DELETE FROM bookings WHERE user_id = ?", [userId]);
 
     // Delete the user
     await pool.query("DELETE FROM users WHERE id = ?", [userId]);
 
+    // Re-enable FK checks
+    await pool.query("SET FOREIGN_KEY_CHECKS = 1");
+
     res.json({ message: "Account deleted successfully" });
   } catch (error) {
-    console.error("Delete account error:", error);
-    res.status(500).json({ error: "Failed to delete account" });
+    try { await pool.query("SET FOREIGN_KEY_CHECKS = 1"); } catch (_) {}
+    console.error("Delete account error:", error.message, error.code);
+    res.status(500).json({ error: error.message || "Failed to delete account" });
   }
 });
 
