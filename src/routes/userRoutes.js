@@ -106,53 +106,42 @@ router.delete("/me", auth, async (req, res) => {
   const userId = req.user.id;
   const { password } = req.body;
 
-  const conn = await pool.getConnection();
   try {
     if (!password) {
-      conn.release();
       return res.status(400).json({ error: "Password is required to delete account" });
     }
 
-    const [rows] = await conn.query(
+    const [rows] = await pool.query(
       "SELECT password_hash FROM users WHERE id = ?",
       [userId]
     );
 
     if (!rows || rows.length === 0) {
-      conn.release();
       return res.status(404).json({ error: "User not found" });
     }
 
     const bcrypt = require("bcrypt");
     const isMatch = await bcrypt.compare(password, rows[0].password_hash);
     if (!isMatch) {
-      conn.release();
       return res.status(400).json({ error: "Incorrect password" });
     }
 
-    await conn.beginTransaction();
-
     // Cancel active bookings
-    await conn.query(
+    await pool.query(
       "UPDATE bookings SET status = 'cancelled' WHERE user_id = ? AND status IN ('booked', 'confirmed')",
       [userId]
     );
 
     // Delete notifications
-    await conn.query("DELETE FROM notifications WHERE user_id = ?", [userId]);
+    await pool.query("DELETE FROM notifications WHERE user_id = ?", [userId]);
 
     // Delete the user
-    await conn.query("DELETE FROM users WHERE id = ?", [userId]);
-
-    await conn.commit();
+    await pool.query("DELETE FROM users WHERE id = ?", [userId]);
 
     res.json({ message: "Account deleted successfully" });
   } catch (error) {
-    await conn.rollback();
     console.error("Delete account error:", error);
     res.status(500).json({ error: "Failed to delete account" });
-  } finally {
-    conn.release();
   }
 });
 
