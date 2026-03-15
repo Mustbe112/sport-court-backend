@@ -1,4 +1,4 @@
-# 🏟️ SportCourt — Sports Court Booking System
+# SportCourt — Sports Court Booking System
 
 A full-stack web application for booking sports courts with real-time availability, coin-based payments, QR code check-ins, and an admin management panel.
 
@@ -8,10 +8,8 @@ A full-stack web application for booking sports courts with real-time availabili
 
 | Service | URL |
 |---------|-----|
-| 🌐 Frontend (Netlify) | [https://tourmaline-tulumba-4614bf.netlify.app/](https://tourmaline-tulumba-4614bf.netlify.app/) |
-| ⚙️ Backend API (Render) | [https://sport-court-backend.onrender.com](https://sport-court-backend.onrender.com) |
-
-> **⚠️ Note for interns:** The backend is hosted on Render's **free tier**. It will **sleep after 15 minutes of inactivity** and may take **20–30 seconds to wake up** on the first request. This is normal — just wait and refresh.
+| Frontend (Netlify) | [https://tourmaline-tulumba-4614bf.netlify.app/](https://tourmaline-tulumba-4614bf.netlify.app/) |
+| Backend API (Render) | [https://sport-court-backend.onrender.com](https://sport-court-backend.onrender.com) |
 
 ---
 
