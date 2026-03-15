@@ -1,12 +1,12 @@
-# 🏟️ SportCourt — Sports Court Booking System
+# SportCourt — Sports Court Booking System
 
 A full-stack web application for booking sports courts with real-time availability, coin-based payments, QR code check-ins, automated no-show handling, and a complete admin management panel.
 
-🌐 **Live Demo:** [https://tourmaline-tulumba-4614bf.netlify.app/](https://tourmaline-tulumba-4614bf.netlify.app/)
+ **Live Demo:** [https://tourmaline-tulumba-4614bf.netlify.app/](https://tourmaline-tulumba-4614bf.netlify.app/)
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Features](#features)
@@ -35,30 +35,30 @@ The system is split into:
 ## Features
 
 ### User Features
-- 🔐 JWT-based authentication (login & registration)
-- 🏟️ Browse & filter courts by type, name, and price
-- 📅 Real-time availability check before booking (with maintenance awareness)
-- ⏱️ 10-minute slot locking during the booking flow to prevent double-booking
-- 💰 Coin-based payment system with top-up support
-- 📱 QR code generated on confirmed bookings for check-in
-- 🔔 Real-time notifications (confirmations, reminders, cancellations, penalties)
-- ⭐ Favorite courts for quick re-booking
-- 🧾 Booking receipts with PDF download
-- 👤 Profile management, password change, and account deletion
+- JWT-based authentication (login & registration)
+- Browse & filter courts by type, name, and price
+- Real-time availability check before booking (with maintenance awareness)
+- 10-minute slot locking during the booking flow to prevent double-booking
+- Coin-based payment system with top-up support
+- QR code generated on confirmed bookings for check-in
+- Real-time notifications (confirmations, reminders, cancellations, penalties)
+- Favorite courts for quick re-booking
+- Booking receipts with PDF download
+- Profile management, password change, and account deletion
 
 ### Admin Features
-- 📊 Analytics dashboard — revenue trends, peak hours, court demand (Chart.js)
-- 🏟️ Court management — add, edit, activate/deactivate courts
-- 🔧 Scheduled court maintenance with automatic cancellation and coin refunds for affected bookings
-- 📋 View and force-cancel any booking with automatic user refund
-- 📷 Camera-based QR scanner for user check-in validation
-- ⚠️ Penalty management — view and resolve user penalties
-- 📈 Stats API: high-demand courts, peak hours, revenue over time
+- Analytics dashboard — revenue trends, peak hours, court demand (Chart.js)
+- Court management — add, edit, activate/deactivate courts
+- Scheduled court maintenance with automatic cancellation and coin refunds for affected bookings
+- View and force-cancel any booking with automatic user refund
+- Camera-based QR scanner for user check-in validation
+- Penalty management — view and resolve user penalties
+- Stats API: high-demand courts, peak hours, revenue over time
 
 ### Automated Features
-- ⏰ Cron job: auto-marks bookings as `no_show` if user doesn't check in within 15 minutes of start time
-- 💸 No-show penalty: 100 coins deducted, no refund issued
-- 🕐 Late checkout penalty: 50 coins added to next booking cost
+- Cron job: auto-marks bookings as `no_show` if user doesn't check in within 15 minutes of start time
+- No-show penalty: 100 coins deducted, no refund issued
+- Late checkout penalty: 50 coins added to next booking cost
 
 ---
 
@@ -192,7 +192,7 @@ sportcourt/
    npx nodemon server.js
    ```
 
-5. The API will be available at `http://localhost:4000`
+5. The API will be available at `https://sport-court-backend.onrender.com`
 
 ### Running the Frontend
 
@@ -281,7 +281,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 🔔 Notifications — `/api/notifications`
+### Notifications — `/api/notifications`
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
@@ -291,7 +291,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 👤 Users — `/api/users`
+### Users — `/api/users`
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
@@ -302,7 +302,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 🛠️ Admin — `/api/admin`
+### Admin — `/api/admin`
 
 All admin routes require both `authMiddleware` and `adminMiddleware`.
 
@@ -465,4 +465,4 @@ This project is for educational and demonstration purposes.
 
 ---
 
-> Made with ❤️ — SportCourt © 2026
+
