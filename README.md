@@ -1,15 +1,15 @@
-# 🏟️ SportCourt — Sports Court Booking System
+# SportCourt — Sports Court Booking System
 
 A full-stack web application for booking sports courts with real-time availability, coin-based payments, QR code check-ins, and an admin management panel.
 
-🌐 **Frontend:** [https://tourmaline-tulumba-4614bf.netlify.app/](https://tourmaline-tulumba-4614bf.netlify.app/)
-⚙️ **Backend API:** [https://sport-court-backend.onrender.com](https://sport-court-backend.onrender.com)
+ **Frontend:** https://tourmaline-tulumba-4614bf.netlify.app/
+ **Backend API:** https://sport-court-backend.onrender.com
 
 > **Note:** The backend is hosted on Render's free tier and may take 20–30 seconds to wake up on the first request.
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Features](#features)
@@ -49,30 +49,30 @@ https://sport-court-backend.onrender.com/api
 ## Features
 
 ### User
-- 🔐 Register and login with JWT authentication
-- 🏟️ Browse and filter courts by sport type, name, and price
-- 📅 Real-time availability checking before booking
-- ⏱️ 10-minute slot locking to prevent double-booking
-- 💰 Coin wallet with top-up support
-- 📱 QR code generated per booking for check-in
-- 🔔 Notifications for confirmations, cancellations, and penalties
-- ⭐ Favorite courts for quick re-booking
-- 🧾 Downloadable PDF receipts
-- 👤 Profile management and account deletion
+- Register and login with JWT authentication
+- Browse and filter courts by sport type, name, and price
+- Real-time availability checking before booking
+- 10-minute slot locking to prevent double-booking
+- Coin wallet with top-up support
+- QR code generated per booking for check-in
+- Notifications for confirmations, cancellations, and penalties
+- Favorite courts for quick re-booking
+- Downloadable PDF receipts
+- Profile management and account deletion
 
 ### Admin
-- 📊 Dashboard with revenue, peak hours, and court demand charts
-- 🏟️ Add, edit, and activate/deactivate courts
-- 🔧 Schedule court maintenance — automatically cancels and refunds affected bookings
-- 📋 View and force-cancel any booking with automatic refund
-- 📷 QR scanner for user check-in validation
-- ⚠️ View and resolve user penalties
-- 📈 Revenue and booking analytics
+- Dashboard with revenue, peak hours, and court demand charts
+- Add, edit, and activate/deactivate courts
+- Schedule court maintenance — automatically cancels and refunds affected bookings
+- View and force-cancel any booking with automatic refund
+- QR scanner for user check-in validation
+- View and resolve user penalties
+- Revenue and booking analytics
 
 ### Automated
-- ⏰ Cron job marks bookings as `no_show` if user doesn't check in within 15 minutes of start time
-- 💸 No-show penalty: 100 coins, no refund
-- 🕐 Late checkout penalty: 50 coins on next booking
+- Cron job marks bookings as `no_show` if user doesn't check in within 15 minutes of start time
+- No-show penalty: 100 coins, no refund
+- Late checkout penalty: 50 coins on next booking
 
 ---
 
@@ -238,19 +238,19 @@ Protected routes require:
 Authorization: Bearer <token>
 ```
 
-### 🔐 Auth — `/api/auth`
+### Auth — `/api/auth`
 | Method | Endpoint | Auth | Description |
 |--------|----------|:----:|-------------|
 | POST | `/register` | ❌ | Register a new account |
 | POST | `/login` | ❌ | Login and receive a JWT token |
 
-### 🏟️ Courts — `/api/courts`
+### Courts — `/api/courts`
 | Method | Endpoint | Auth | Description |
 |--------|----------|:----:|-------------|
 | GET | `/` | ❌ | Get all active courts |
 | GET | `/type/:type` | ❌ | Filter courts by sport type |
 
-### 📅 Bookings — `/api/bookings`
+### Bookings — `/api/bookings`
 | Method | Endpoint | Auth | Description |
 |--------|----------|:----:|-------------|
 | POST | `/availability` | ✅ | Check if a slot is available |
@@ -261,14 +261,14 @@ Authorization: Bearer <token>
 | GET | `/my-bookings` | ✅ | Get your booking history |
 | GET | `/:id` | ✅ | Get a single booking by ID |
 
-### 🔔 Notifications — `/api/notifications`
+### Notifications — `/api/notifications`
 | Method | Endpoint | Auth | Description |
 |--------|----------|:----:|-------------|
 | GET | `/` | ✅ | Get your notifications |
 | PUT | `/read-all` | ✅ | Mark all as read |
 | PUT | `/:id/read` | ✅ | Mark one as read |
 
-### 👤 Users — `/api/users`
+### Users — `/api/users`
 | Method | Endpoint | Auth | Description |
 |--------|----------|:----:|-------------|
 | GET | `/me` | ✅ | Get profile and coin balance |
@@ -276,7 +276,7 @@ Authorization: Bearer <token>
 | PUT | `/me/password` | ✅ | Change password |
 | DELETE | `/me` | ✅ | Delete account |
 
-### 🛠️ Admin — `/api/admin`
+### Admin — `/api/admin`
 > Requires `role: "admin"` in JWT token.
 
 **Courts**
@@ -423,4 +423,3 @@ This project is for educational purposes.
 
 ---
 
-> Made with ❤️ — SportCourt © 2026
