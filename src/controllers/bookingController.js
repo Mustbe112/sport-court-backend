@@ -276,7 +276,7 @@ exports.checkOut = async (req, res) => {
     const now = new Date();
 
     // late checkout (> 15 minutes past end time)
-    if (now > new Date(bookingEnd.getTime() + 15 * 60000)) {
+    if (now > new Date(bookingEnd.getTime() + 5 * 60000)) {
       // Penalty = 1 hour of the booked court's price
       const penaltyAmount = booking.price_per_hour;
 
