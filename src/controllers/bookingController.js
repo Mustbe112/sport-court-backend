@@ -275,10 +275,32 @@ exports.checkOut = async (req, res) => {
     const bookingEnd = new Date(`${booking.date} ${booking.end_time}`);
     const now = new Date();
 
-    // late checkout (> 15 minutes past end time)
-    if (now > new Date(bookingEnd.getTime() + 2 * 60000)) {
+    // Check if someone else has booked this court immediately after (same date, starts at our end_time)
+    const [[nextBooking]] = await pool.query(
+      `SELECT id FROM bookings
+       WHERE court_id = ?
+       AND date = ?
+       AND start_time = ?
+       AND status IN ('booked', 'confirmed')
+       LIMIT 1`,
+      [booking.court_id, booking.date, booking.end_time]
+    );
+
+    const isNextSlotBooked = !!nextBooking;
+
+    // Penalty rules:
+    // - Next slot IS booked by someone → any checkout past end_time triggers penalty
+    // - Next slot is FREE              → 15-minute grace period before penalty
+    const gracePeriodMs = isNextSlotBooked ? 0 : 15 * 60 * 1000;
+    const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
+
+    if (now > penaltyThreshold) {
       // Penalty = 1 hour of the booked court's price
       const penaltyAmount = booking.price_per_hour;
+
+      const reason = isNextSlotBooked
+        ? `Late checkout from ${booking.court_name}. The next slot was already booked by another user.`
+        : `Late checkout from ${booking.court_name}. Exceeded 15-minute grace period.`;
 
       // Add penalty to user's pending penalty balance
       await pool.query(
@@ -290,12 +312,7 @@ exports.checkOut = async (req, res) => {
       await pool.query(
         `INSERT INTO penalties (user_id, booking_id, type, description, amount, resolved)
          VALUES (?, ?, 'late_checkout', ?, ?, 0)`,
-        [
-          booking.user_id,
-          bookingId,
-          `Late checkout from ${booking.court_name}. 1-hour court fee penalty applied.`,
-          penaltyAmount
-        ]
+        [booking.user_id, bookingId, reason, penaltyAmount]
       );
 
       await createNotification(
@@ -303,6 +320,17 @@ exports.checkOut = async (req, res) => {
         'Late Checkout Penalty',
         `You checked out late from ${booking.court_name}. A penalty of ${penaltyAmount} coins (1-hour court fee) will be charged on your next booking.`
       );
+
+      await pool.query(
+        `UPDATE bookings SET status = 'completed' WHERE id = ?`,
+        [bookingId]
+      );
+
+      return res.json({
+        message: 'Checked out with late penalty',
+        penalty_applied: penaltyAmount,
+        reason
+      });
     }
 
     await pool.query(
@@ -313,6 +341,78 @@ exports.checkOut = async (req, res) => {
     res.json({ message: 'Checked out successfully' });
 
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/* ============================
+   AUTO COMPLETE (CRON)
+   Marks confirmed bookings as 'completed' once their end_time has passed
+============================ */
+exports.autoComplete = async (req, res) => {
+  try {
+    const [bookings] = await pool.query(
+      `SELECT b.id, b.user_id, b.court_id, b.date, b.end_time,
+              c.price_per_hour, c.name AS court_name
+       FROM bookings b
+       JOIN courts c ON b.court_id = c.id
+       WHERE b.status = 'confirmed'
+       AND NOW() > CONCAT(b.date, ' ', b.end_time)`
+    );
+
+    for (const b of bookings) {
+      const now = new Date();
+      const bookingEnd = new Date(`${b.date} ${b.end_time}`);
+      const gracePeriodMs = 15 * 60 * 1000;
+
+      // Check if the next slot on this court was booked by someone else
+      const [[nextBooking]] = await pool.query(
+        `SELECT id FROM bookings
+         WHERE court_id = ?
+         AND date = ?
+         AND start_time = ?
+         AND status IN ('booked', 'confirmed')
+         LIMIT 1`,
+        [b.court_id, b.date, b.end_time]
+      );
+
+      const isNextSlotBooked = !!nextBooking;
+      const penaltyThreshold = new Date(bookingEnd.getTime() + (isNextSlotBooked ? 0 : gracePeriodMs));
+
+      // If user never checked out and penalty threshold is exceeded → apply penalty
+      if (now > penaltyThreshold) {
+        const penaltyAmount = b.price_per_hour;
+        const reason = isNextSlotBooked
+          ? `Auto-completed: Did not check out from ${b.court_name}. Next slot was already booked.`
+          : `Auto-completed: Did not check out from ${b.court_name}. Exceeded 15-minute grace period.`;
+
+        await pool.query(
+          `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
+          [penaltyAmount, b.user_id]
+        );
+
+        await pool.query(
+          `INSERT INTO penalties (user_id, booking_id, type, description, amount, resolved)
+           VALUES (?, ?, 'late_checkout', ?, ?, 0)`,
+          [b.user_id, b.id, reason, penaltyAmount]
+        );
+
+        await createNotification(
+          b.user_id,
+          'Late Checkout Penalty',
+          `You did not check out from ${b.court_name} on time. A penalty of ${penaltyAmount} coins will be charged on your next booking.`
+        );
+      }
+
+      await pool.query(
+        `UPDATE bookings SET status = 'completed' WHERE id = ?`,
+        [b.id]
+      );
+    }
+
+    res.json({ message: 'Auto-complete executed', completed: bookings.length });
+  } catch (err) {
+    console.error('❌ Auto-complete error:', err);
     res.status(500).json({ error: err.message });
   }
 };
