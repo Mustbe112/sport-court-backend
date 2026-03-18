@@ -6,7 +6,7 @@ const cron = require('node-cron');
 const axios = require('axios');
 
 // Run every 5 minutes
-cron.schedule('*/5 * * * *', async () => {
+cron.schedule('*/1 * * * *', async () => {
   console.log('🔄 Running no-show check...');
 
   try {
