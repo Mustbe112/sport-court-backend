@@ -436,42 +436,26 @@ exports.autoNoShow = async (req, res) => {
     for (const b of bookings) {
       console.log(`⚠️ Marking booking #${b.id} as no-show`);
 
-      const penaltyAmount = b.price_per_hour;
-
+      // Just mark as no_show — payment was already collected at booking time.
+      // No additional penalty is charged. Penalty only applies to late checkout.
       await pool.query(
         `UPDATE bookings SET status = 'no_show' WHERE id = ?`,
         [b.id]
       );
 
-      await pool.query(
-        `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
-        [penaltyAmount, b.user_id]
-      );
-
-      await pool.query(
-        `INSERT INTO penalties (user_id, booking_id, type, description, amount, resolved)
-         VALUES (?, ?, 'no_show', ?, ?, 0)`,
-        [
-          b.user_id,
-          b.id,
-          `No-show for booking at ${b.court_name}. 1-hour court fee penalty applied.`,
-          penaltyAmount
-        ]
-      );
-
       await createNotification(
         b.user_id,
-        'No-Show Penalty',
-        `You did not check in for your booking at ${b.court_name}. A penalty of ${penaltyAmount} coins (1-hour court fee) will be charged on your next booking. No refund has been issued.`
+        'No-Show',
+        `You did not check in for your booking at ${b.court_name}. Your booking has been marked as no-show. No refund has been issued.`
       );
 
-      console.log(`✅ Booking #${b.id} marked as no-show, penalty of ${penaltyAmount} coins applied`);
+      console.log(`✅ Booking #${b.id} marked as no-show`);
     }
 
     res.json({
       message: 'Auto no-show executed',
       no_shows: bookings.length,
-      bookings: bookings.map(b => ({ id: b.id, date: b.date, start_time: b.start_time, penalty_applied: b.price_per_hour }))
+      bookings: bookings.map(b => ({ id: b.id, date: b.date, start_time: b.start_time }))
     });
 
   } catch (err) {
