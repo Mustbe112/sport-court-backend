@@ -346,10 +346,23 @@ exports.confirmBooking = async (req, res) => {
 exports.getAllPenalties = async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT u.id, u.email, u.penalty, u.updated_at
-      FROM users u
-      WHERE u.penalty > 0
-      ORDER BY u.penalty DESC
+      SELECT 
+        p.id AS penalty_id,
+        p.user_id,
+        u.email,
+        u.penalty AS pending_penalty_balance,
+        p.booking_id,
+        p.type,
+        p.description,
+        p.amount,
+        p.resolved,
+        p.created_at,
+        c.name AS court_name
+      FROM penalties p
+      JOIN users u ON p.user_id = u.id
+      LEFT JOIN bookings b ON p.booking_id = b.id
+      LEFT JOIN courts c ON b.court_id = c.id
+      ORDER BY p.created_at DESC
     `);
 
     res.json(rows);
@@ -360,11 +373,18 @@ exports.getAllPenalties = async (req, res) => {
 };
 
 exports.resolvePenalty = async (req, res) => {
-  const { id } = req.params;
+  const { id } = req.params; // this is user_id
 
   try {
+    // Reset user's pending penalty balance
     await pool.query(
       'UPDATE users SET penalty = 0 WHERE id = ?',
+      [id]
+    );
+
+    // Mark all unresolved penalty records for this user as resolved
+    await pool.query(
+      'UPDATE penalties SET resolved = 1 WHERE user_id = ? AND resolved = 0',
       [id]
     );
 
