@@ -2,23 +2,6 @@ const pool = require('../config/db');
 const { generateQRCode, generatePDF } = require("../utils/bookingUtils");
 const { createNotification } = require('../utils/notificationUtils');
 
-/**
- * Safely build a JS Date from a MySQL date field + a time string.
- * MySQL date columns often come back as full ISO strings like
- * "2026-03-18T00:00:00.000Z", so we always extract just the
- * YYYY-MM-DD part before combining with the time.
- *
- * @param {string|Date} dateField  - value from b.date / booking.date
- * @param {string}      timeStr    - "HH:MM:SS" or "HH:MM"
- * @returns {Date}
- */
-function buildDateTime(dateField, timeStr) {
-  const datePart = (dateField instanceof Date)
-    ? dateField.toISOString().slice(0, 10)          // e.g. "2026-03-18"
-    : String(dateField).slice(0, 10);               // handles ISO strings or plain dates
-  return new Date(`${datePart}T${timeStr}`);        // local-time ISO format
-}
-
 /* ============================
    1️⃣ CHECK AVAILABILITY
 ============================ */
@@ -162,8 +145,10 @@ exports.createBooking = async (req, res) => {
     const endTime = new Date(`1970-01-01 ${end_time}`);
     const durationHours = (endTime - startTime) / (1000 * 60 * 60);
     
-    // Calculate total price: (price per hour × hours) + penalty
-    const totalPrice = (court.price_per_hour * durationHours) + user.penalty;
+    // Separate base cost from penalty so the receipt can show them individually
+    const baseCost    = court.price_per_hour * durationHours;
+    const penaltyAmount = user.penalty || 0;
+    const totalPrice  = baseCost + penaltyAmount;
 
     if (user.coin_balance < totalPrice) {
       await conn.rollback();
@@ -203,7 +188,11 @@ exports.createBooking = async (req, res) => {
     
     res.json({ 
       message: 'Booking paid & created',
-      booking_id: result.insertId
+      booking_id: result.insertId,
+      // Return the breakdown so the frontend can show it on the receipt
+      base_cost: baseCost,
+      penalty_amount: penaltyAmount,
+      total_price: totalPrice
     });
 
   } catch (err) {
@@ -289,16 +278,14 @@ exports.checkOut = async (req, res) => {
       return res.status(404).json({ message: 'Booking not found or not confirmed' });
     }
 
-    // Use buildDateTime to safely combine the MySQL date field with the time string
-    const bookingEnd = buildDateTime(booking.date, booking.end_time);
+    const bookingEnd = new Date(`${booking.date} ${booking.end_time}`);
     const now = new Date();
 
-    // Check if someone else has booked this court immediately after
-    // (same date, their start_time == our end_time)
+    // Check if someone else has booked this court immediately after (same date, starts at our end_time)
     const [[nextBooking]] = await pool.query(
       `SELECT id FROM bookings
        WHERE court_id = ?
-       AND DATE(date) = DATE(?)
+       AND date = ?
        AND start_time = ?
        AND status IN ('booked', 'confirmed')
        LIMIT 1`,
@@ -308,8 +295,8 @@ exports.checkOut = async (req, res) => {
     const isNextSlotBooked = !!nextBooking;
 
     // Penalty rules:
-    // - Next slot IS booked → any checkout even 1 minute past end_time triggers penalty
-    // - Next slot is FREE   → 15-minute grace period before penalty kicks in
+    // - Next slot IS booked by someone → any checkout past end_time triggers penalty
+    // - Next slot is FREE              → 15-minute grace period before penalty
     const gracePeriodMs = isNextSlotBooked ? 0 : 15 * 60 * 1000;
     const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
 
@@ -381,16 +368,14 @@ exports.autoComplete = async (req, res) => {
 
     for (const b of bookings) {
       const now = new Date();
-      // Use buildDateTime to avoid MySQL date field parsing issues
-      const bookingEnd = buildDateTime(b.date, b.end_time);
+      const bookingEnd = new Date(`${b.date} ${b.end_time}`);
       const gracePeriodMs = 15 * 60 * 1000;
 
       // Check if the next slot on this court was booked by someone else
-      // (their start_time == our end_time, same calendar date)
       const [[nextBooking]] = await pool.query(
         `SELECT id FROM bookings
          WHERE court_id = ?
-         AND DATE(date) = DATE(?)
+         AND date = ?
          AND start_time = ?
          AND status IN ('booked', 'confirmed')
          LIMIT 1`,
