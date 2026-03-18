@@ -6,20 +6,15 @@ const pool = mysql.createPool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  ssl: {
-    rejectUnauthorized: true
-  },
+  ssl: { rejectUnauthorized: true },
   waitForConnections: true,
   connectionLimit: 10,
   timezone: '+07:00',
 });
 
-// Set Bangkok timezone for every connection
-const originalGetConnection = pool.getConnection.bind(pool);
-pool.getConnection = async () => {
-  const conn = await originalGetConnection();
-  await conn.query("SET time_zone = '+07:00'");
-  return conn;
-};
+// Force session timezone on every connection from the pool
+pool.on('acquire', function(connection) {
+  connection.query("SET time_zone = '+07:00'");
+});
 
 module.exports = pool;
