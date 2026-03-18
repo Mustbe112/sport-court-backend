@@ -278,16 +278,14 @@ exports.checkOut = async (req, res) => {
       return res.status(404).json({ message: 'Booking not found or not confirmed' });
     }
 
-    // Use buildDateTime to safely combine MySQL date field with time string
-    const bookingEnd = buildDateTime(booking.date, booking.end_time);
+    const bookingEnd = new Date(`${booking.date} ${booking.end_time}`);
     const now = new Date();
 
-    // Check if someone else has booked this court immediately after
-    // (their start_time == our end_time, same calendar date)
+    // Check if someone else has booked this court immediately after (same date, starts at our end_time)
     const [[nextBooking]] = await pool.query(
       `SELECT id FROM bookings
        WHERE court_id = ?
-       AND DATE(date) = DATE(?)
+       AND date = ?
        AND start_time = ?
        AND status IN ('booked', 'confirmed')
        LIMIT 1`,
@@ -297,8 +295,8 @@ exports.checkOut = async (req, res) => {
     const isNextSlotBooked = !!nextBooking;
 
     // Penalty rules:
-    // - Next slot IS booked → any checkout past end_time triggers penalty (0 grace)
-    // - Next slot is FREE   → 15-minute grace period before penalty
+    // - Next slot IS booked by someone → any checkout past end_time triggers penalty
+    // - Next slot is FREE              → 15-minute grace period before penalty
     const gracePeriodMs = isNextSlotBooked ? 0 : 15 * 60 * 1000;
     const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
 
@@ -359,29 +357,25 @@ exports.checkOut = async (req, res) => {
 ============================ */
 exports.autoComplete = async (req, res) => {
   try {
-    // KEY FIX: Use ADDTIME(DATE(date), end_time) instead of CONCAT(date, ' ', end_time)
-    // because the date column is a DATETIME, so CONCAT produces an invalid string
-    // like "2026-02-01T00:00:00.000Z 11:00:00" which MySQL cannot compare to NOW().
     const [bookings] = await pool.query(
       `SELECT b.id, b.user_id, b.court_id, b.date, b.end_time,
               c.price_per_hour, c.name AS court_name
        FROM bookings b
        JOIN courts c ON b.court_id = c.id
        WHERE b.status = 'confirmed'
-       AND NOW() > ADDTIME(DATE(b.date), b.end_time)`
+       AND NOW() > CONCAT(b.date, ' ', b.end_time)`
     );
 
     for (const b of bookings) {
       const now = new Date();
-      // Use buildDateTime to safely combine MySQL date field with time string
-      const bookingEnd    = buildDateTime(b.date, b.end_time);
+      const bookingEnd = new Date(`${b.date} ${b.end_time}`);
       const gracePeriodMs = 15 * 60 * 1000;
 
       // Check if the next slot on this court was booked by someone else
       const [[nextBooking]] = await pool.query(
         `SELECT id FROM bookings
          WHERE court_id = ?
-         AND DATE(date) = DATE(?)
+         AND date = ?
          AND start_time = ?
          AND status IN ('booked', 'confirmed')
          LIMIT 1`,
@@ -444,7 +438,7 @@ exports.autoNoShow = async (req, res) => {
        WHERE b.status = 'booked'
        AND b.checked_in = FALSE
        AND NOW() > DATE_ADD(
-         ADDTIME(DATE(b.date), b.start_time),
+         CONCAT(b.date, ' ', b.start_time),
          INTERVAL 15 MINUTE
        )`
     );
