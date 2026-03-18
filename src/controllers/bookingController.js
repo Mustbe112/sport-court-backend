@@ -2,6 +2,19 @@ const pool = require('../config/db');
 const { generateQRCode, generatePDF } = require("../utils/bookingUtils");
 const { createNotification } = require('../utils/notificationUtils');
 
+/**
+ * Safely build a JS Date from a MySQL date field + a time string.
+ * MySQL DATETIME columns come back as full ISO strings like
+ * "2026-02-01T00:00:00.000Z", so we always extract just the
+ * YYYY-MM-DD part before combining with the time.
+ */
+function buildDateTime(dateField, timeStr) {
+  const datePart = (dateField instanceof Date)
+    ? dateField.toISOString().slice(0, 10)
+    : String(dateField).slice(0, 10);
+  return new Date(`${datePart}T${timeStr}`);
+}
+
 /* ============================
    1️⃣ CHECK AVAILABILITY
 ============================ */
@@ -9,7 +22,6 @@ exports.checkAvailability = async (req, res) => {
   const { court_id, date, start_time, end_time } = req.body;
 
   try {
-    // Check for booking conflicts
     const [conflicts] = await pool.query(
       `SELECT id FROM bookings
        WHERE court_id = ?
@@ -24,7 +36,6 @@ exports.checkAvailability = async (req, res) => {
       return res.json({ available: false, reason: 'Time slot already booked' });
     }
 
-    // ⭐ Check for maintenance periods
     const [maintenance] = await pool.query(
       `SELECT id, reason FROM court_maintenance
        WHERE court_id = ?
@@ -53,10 +64,8 @@ exports.lockSlot = async (req, res) => {
   const { court_id, date, start_time, end_time } = req.body;
 
   try {
-    // remove expired locks
     await pool.query(`DELETE FROM slot_locks WHERE expires_at < NOW()`);
 
-    // check overlapping lock
     const [locks] = await pool.query(
       `SELECT id FROM slot_locks
        WHERE court_id = ?
@@ -70,7 +79,6 @@ exports.lockSlot = async (req, res) => {
       return res.status(400).json({ message: 'Slot temporarily locked' });
     }
 
-    // insert new lock
     await pool.query(
       `INSERT INTO slot_locks
        (court_id, date, start_time, end_time, expires_at)
@@ -96,7 +104,6 @@ exports.createBooking = async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    // check availability again (important)
     const [conflicts] = await conn.query(
       `SELECT id FROM bookings
        WHERE court_id = ?
@@ -112,7 +119,6 @@ exports.createBooking = async (req, res) => {
       return res.status(400).json({ message: 'Time slot not available' });
     }
 
-    // ⭐ Check for maintenance
     const [maintenance] = await conn.query(
       `SELECT id, reason FROM court_maintenance
        WHERE court_id = ?
@@ -128,42 +134,34 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    // court price
     const [[court]] = await conn.query(
       'SELECT price_per_hour FROM courts WHERE id = ?',
       [court_id]
     );
 
-    // user coins & penalty
     const [[user]] = await conn.query(
       'SELECT coin_balance, penalty FROM users WHERE id = ?',
       [user_id]
     );
 
-    // Calculate duration in hours
     const startTime = new Date(`1970-01-01 ${start_time}`);
     const endTime = new Date(`1970-01-01 ${end_time}`);
     const durationHours = (endTime - startTime) / (1000 * 60 * 60);
-    
-    // Separate base cost from penalty so the receipt can show them individually
-    const baseCost    = court.price_per_hour * durationHours;
+
+    const baseCost      = court.price_per_hour * durationHours;
     const penaltyAmount = user.penalty || 0;
-    const totalPrice  = baseCost + penaltyAmount;
+    const totalPrice    = baseCost + penaltyAmount;
 
     if (user.coin_balance < totalPrice) {
       await conn.rollback();
       return res.status(400).json({ message: 'Not enough coins' });
     }
 
-    // deduct coins + reset penalty
     await conn.query(
-      `UPDATE users
-       SET coin_balance = coin_balance - ?, penalty = 0
-       WHERE id = ?`,
+      `UPDATE users SET coin_balance = coin_balance - ?, penalty = 0 WHERE id = ?`,
       [totalPrice, user_id]
     );
 
-    // create booking with status='booked' (not confirmed yet)
     const [result] = await conn.query(
       `INSERT INTO bookings
        (user_id, court_id, date, start_time, end_time, status, total_price)
@@ -171,25 +169,22 @@ exports.createBooking = async (req, res) => {
       [user_id, court_id, date, start_time, end_time, totalPrice]
     );
 
-    // remove slot lock
     await conn.query(
-      `DELETE FROM slot_locks
-       WHERE court_id = ? AND date = ?`,
+      `DELETE FROM slot_locks WHERE court_id = ? AND date = ?`,
       [court_id, date]
     );
 
     await conn.commit();
-    
+
     await createNotification(
       user_id,
       'Booking Created',
       'Your booking has been created. Please check in on the day of your appointment.'
     );
-    
-    res.json({ 
+
+    res.json({
       message: 'Booking paid & created',
       booking_id: result.insertId,
-      // Return the breakdown so the frontend can show it on the receipt
       base_cost: baseCost,
       penalty_amount: penaltyAmount,
       total_price: totalPrice
@@ -227,28 +222,24 @@ exports.cancelBooking = async (req, res) => {
       return res.status(404).json({ message: 'Booking not found or cannot be cancelled' });
     }
 
-    // cancel booking
     await conn.query(
       `UPDATE bookings SET status = 'cancelled' WHERE id = ?`,
       [bookingId]
     );
 
-    // refund coins
     await conn.query(
-      `UPDATE users
-       SET coin_balance = coin_balance + ?
-       WHERE id = ?`,
+      `UPDATE users SET coin_balance = coin_balance + ? WHERE id = ?`,
       [booking.total_price, user_id]
     );
 
     await conn.commit();
-    
+
     await createNotification(
       user_id,
       'Booking Cancelled',
       'Your booking has been cancelled and refunded.'
     );
-    
+
     res.json({ message: 'Booking cancelled & refunded' });
 
   } catch (err) {
@@ -278,14 +269,15 @@ exports.checkOut = async (req, res) => {
       return res.status(404).json({ message: 'Booking not found or not confirmed' });
     }
 
-    const bookingEnd = new Date(`${booking.date} ${booking.end_time}`);
+    // FIX: use buildDateTime so MySQL DATETIME field parses correctly
+    const bookingEnd = buildDateTime(booking.date, booking.end_time);
     const now = new Date();
 
-    // Check if someone else has booked this court immediately after (same date, starts at our end_time)
+    // Check if next slot on this court is booked by someone else
     const [[nextBooking]] = await pool.query(
       `SELECT id FROM bookings
        WHERE court_id = ?
-       AND date = ?
+       AND DATE(date) = DATE(?)
        AND start_time = ?
        AND status IN ('booked', 'confirmed')
        LIMIT 1`,
@@ -294,27 +286,22 @@ exports.checkOut = async (req, res) => {
 
     const isNextSlotBooked = !!nextBooking;
 
-    // Penalty rules:
-    // - Next slot IS booked by someone → any checkout past end_time triggers penalty
-    // - Next slot is FREE              → 15-minute grace period before penalty
-    const gracePeriodMs = isNextSlotBooked ? 0 : 15 * 60 * 1000;
+    // Next slot booked → 0 grace period; free → 15 min grace
+    const gracePeriodMs   = isNextSlotBooked ? 0 : 15 * 60 * 1000;
     const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
 
     if (now > penaltyThreshold) {
-      // Penalty = 1 hour of the booked court's price
       const penaltyAmount = booking.price_per_hour;
 
       const reason = isNextSlotBooked
         ? `Late checkout from ${booking.court_name}. The next slot was already booked by another user.`
         : `Late checkout from ${booking.court_name}. Exceeded 15-minute grace period.`;
 
-      // Add penalty to user's pending penalty balance
       await pool.query(
         `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
         [penaltyAmount, booking.user_id]
       );
 
-      // Record in penalties table for audit trail
       await pool.query(
         `INSERT INTO penalties (user_id, booking_id, type, description, amount, resolved)
          VALUES (?, ?, 'late_checkout', ?, ?, 0)`,
@@ -353,29 +340,30 @@ exports.checkOut = async (req, res) => {
 
 /* ============================
    AUTO COMPLETE (CRON)
-   Marks confirmed bookings as 'completed' once their end_time has passed
 ============================ */
 exports.autoComplete = async (req, res) => {
   try {
+    // FIX: ADDTIME(DATE(b.date), b.end_time) instead of CONCAT(b.date, ' ', b.end_time)
+    // CONCAT breaks because the date column is DATETIME, producing an invalid string.
     const [bookings] = await pool.query(
       `SELECT b.id, b.user_id, b.court_id, b.date, b.end_time,
               c.price_per_hour, c.name AS court_name
        FROM bookings b
        JOIN courts c ON b.court_id = c.id
        WHERE b.status = 'confirmed'
-       AND NOW() > CONCAT(b.date, ' ', b.end_time)`
+       AND NOW() > ADDTIME(DATE(b.date), b.end_time)`
     );
 
     for (const b of bookings) {
       const now = new Date();
-      const bookingEnd = new Date(`${b.date} ${b.end_time}`);
+      // FIX: use buildDateTime so MySQL DATETIME field parses correctly
+      const bookingEnd    = buildDateTime(b.date, b.end_time);
       const gracePeriodMs = 15 * 60 * 1000;
 
-      // Check if the next slot on this court was booked by someone else
       const [[nextBooking]] = await pool.query(
         `SELECT id FROM bookings
          WHERE court_id = ?
-         AND date = ?
+         AND DATE(date) = DATE(?)
          AND start_time = ?
          AND status IN ('booked', 'confirmed')
          LIMIT 1`,
@@ -385,7 +373,6 @@ exports.autoComplete = async (req, res) => {
       const isNextSlotBooked = !!nextBooking;
       const penaltyThreshold = new Date(bookingEnd.getTime() + (isNextSlotBooked ? 0 : gracePeriodMs));
 
-      // If user never checked out and penalty threshold is exceeded → apply penalty
       if (now > penaltyThreshold) {
         const penaltyAmount = b.price_per_hour;
         const reason = isNextSlotBooked
@@ -429,7 +416,8 @@ exports.autoComplete = async (req, res) => {
 exports.autoNoShow = async (req, res) => {
   try {
     console.log('🔍 Checking for no-shows at:', new Date().toISOString());
-    
+
+    // FIX: ADDTIME(DATE(b.date), b.start_time) instead of CONCAT(b.date, ' ', b.start_time)
     const [bookings] = await pool.query(
       `SELECT b.id, b.user_id, b.total_price, b.date, b.start_time, b.checked_in,
               b.court_id, c.price_per_hour, c.name AS court_name
@@ -438,7 +426,7 @@ exports.autoNoShow = async (req, res) => {
        WHERE b.status = 'booked'
        AND b.checked_in = FALSE
        AND NOW() > DATE_ADD(
-         CONCAT(b.date, ' ', b.start_time),
+         ADDTIME(DATE(b.date), b.start_time),
          INTERVAL 15 MINUTE
        )`
     );
@@ -447,23 +435,19 @@ exports.autoNoShow = async (req, res) => {
 
     for (const b of bookings) {
       console.log(`⚠️ Marking booking #${b.id} as no-show`);
-      
-      // Penalty = 1 hour of the booked court's price
+
       const penaltyAmount = b.price_per_hour;
 
-      // mark as no-show
       await pool.query(
         `UPDATE bookings SET status = 'no_show' WHERE id = ?`,
         [b.id]
       );
 
-      // NO REFUND for no-show — apply court-based penalty
       await pool.query(
         `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
         [penaltyAmount, b.user_id]
       );
 
-      // Record in penalties table for audit trail
       await pool.query(
         `INSERT INTO penalties (user_id, booking_id, type, description, amount, resolved)
          VALUES (?, ?, 'no_show', ?, ?, 0)`,
@@ -480,7 +464,7 @@ exports.autoNoShow = async (req, res) => {
         'No-Show Penalty',
         `You did not check in for your booking at ${b.court_name}. A penalty of ${penaltyAmount} coins (1-hour court fee) will be charged on your next booking. No refund has been issued.`
       );
-      
+
       console.log(`✅ Booking #${b.id} marked as no-show, penalty of ${penaltyAmount} coins applied`);
     }
 
@@ -512,18 +496,15 @@ exports.confirmBooking = async (req, res) => {
       return res.status(404).json({ error: "Booking not found or already confirmed" });
     }
 
-    // Check if it's the appointment date
     const bookingDate = new Date(booking.date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     bookingDate.setHours(0, 0, 0, 0);
 
-    // Only prevent confirming past bookings, allow future bookings
     if (bookingDate.getTime() < today.getTime()) {
       return res.status(400).json({ error: "Cannot confirm past bookings" });
     }
 
-    // Generate QR code text
     const qrText = `BOOKING-${booking.id}`;
 
     await pool.query(
@@ -549,16 +530,14 @@ exports.confirmBooking = async (req, res) => {
 };
 
 /* ============================
-   8️⃣ CHECK-IN (DEPRECATED - Use confirmBooking instead)
+   8️⃣ CHECK-IN (DEPRECATED)
 ============================ */
 exports.checkIn = async (req, res) => {
   const bookingId = req.params.id;
 
   try {
     const [result] = await pool.query(
-      `UPDATE bookings
-       SET checked_in = 1
-       WHERE id = ? AND status = 'confirmed'`,
+      `UPDATE bookings SET checked_in = 1 WHERE id = ? AND status = 'confirmed'`,
       [bookingId]
     );
 
@@ -578,7 +557,7 @@ exports.checkIn = async (req, res) => {
 exports.getUserBookings = async (req, res) => {
   try {
     const userId = req.user.id;
-    
+
     const [bookings] = await pool.query(`
       SELECT 
         b.id,
@@ -598,7 +577,7 @@ exports.getUserBookings = async (req, res) => {
       WHERE b.user_id = ?
       ORDER BY b.date DESC, b.start_time DESC
     `, [userId]);
-    
+
     res.json(bookings);
   } catch (error) {
     console.error('Error fetching user bookings:', error);
@@ -613,7 +592,7 @@ exports.getBookingById = async (req, res) => {
   try {
     const bookingId = req.params.id;
     const userId = req.user.id;
-    
+
     const [bookings] = await pool.query(`
       SELECT 
         b.*,
@@ -627,11 +606,11 @@ exports.getBookingById = async (req, res) => {
       LEFT JOIN users u ON b.user_id = u.id
       WHERE b.id = ? AND b.user_id = ?
     `, [bookingId, userId]);
-    
+
     if (bookings.length === 0) {
       return res.status(404).json({ error: 'Booking not found' });
     }
-    
+
     res.json(bookings[0]);
   } catch (error) {
     console.error('Error fetching booking:', error);
