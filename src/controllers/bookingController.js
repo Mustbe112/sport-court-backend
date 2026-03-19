@@ -334,7 +334,7 @@ exports.checkOut = async (req, res) => {
     const now = new Date();
 
     // Always apply 15-minute grace period regardless of next slot
-    const gracePeriodMs    = 15 * 60 * 1000;
+    const gracePeriodMs    = 10 * 60 * 1000;
     const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
 
     if (now > penaltyThreshold) {
