@@ -312,12 +312,11 @@ exports.confirmBooking = async (req, res) => {
       return res.status(404).json({ error: 'Booking not found or already confirmed' });
     }
 
-    const bookingDate = new Date(booking.date);
-    const today = new Date();
-    bookingDate.setHours(0, 0, 0, 0);
-    today.setHours(0, 0, 0, 0);
+    // Safely compare dates as strings to avoid timezone issues with MySQL DATETIME
+    const bookingDateStr = String(booking.date).slice(0, 10); // "YYYY-MM-DD"
+    const todayStr = new Date().toLocaleDateString('en-CA');  // "YYYY-MM-DD" in local time
 
-    if (bookingDate.getTime() < today.getTime()) {
+    if (bookingDateStr < todayStr) {
       return res.status(400).json({ error: 'Cannot confirm past bookings' });
     }
 
