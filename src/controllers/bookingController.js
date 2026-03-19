@@ -333,29 +333,13 @@ exports.checkOut = async (req, res) => {
     const bookingEnd = buildDateTime(booking.date, booking.end_time);
     const now = new Date();
 
-    // Check if next slot on this court is booked by someone else
-    const [[nextBooking]] = await pool.query(
-      `SELECT id FROM bookings
-       WHERE court_id = ?
-       AND DATE(date) = DATE(?)
-       AND start_time = ?
-       AND status IN ('booked', 'confirmed')
-       LIMIT 1`,
-      [booking.court_id, booking.date, booking.end_time]
-    );
-
-    const isNextSlotBooked = !!nextBooking;
-
-    // Next slot booked → 0 grace period; free → 15 min grace
-    const gracePeriodMs   = isNextSlotBooked ? 0 : 15 * 60 * 1000;
+    // Always apply 15-minute grace period regardless of next slot
+    const gracePeriodMs    = 15 * 60 * 1000;
     const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
 
     if (now > penaltyThreshold) {
       const penaltyAmount = booking.price_per_hour;
-
-      const reason = isNextSlotBooked
-        ? `Late checkout from ${booking.court_name}. The next slot was already booked by another user.`
-        : `Late checkout from ${booking.court_name}. Exceeded 15-minute grace period.`;
+      const reason = `Late checkout from ${booking.court_name}. Exceeded 15-minute grace period.`;
 
       await pool.query(
         `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
@@ -420,24 +404,12 @@ exports.autoComplete = async (req, res) => {
       const bookingEnd    = buildDateTime(b.date, b.end_time);
       const gracePeriodMs = 15 * 60 * 1000;
 
-      const [[nextBooking]] = await pool.query(
-        `SELECT id FROM bookings
-         WHERE court_id = ?
-         AND DATE(date) = DATE(?)
-         AND start_time = ?
-         AND status IN ('booked', 'confirmed')
-         LIMIT 1`,
-        [b.court_id, b.date, b.end_time]
-      );
-
-      const isNextSlotBooked = !!nextBooking;
-      const penaltyThreshold = new Date(bookingEnd.getTime() + (isNextSlotBooked ? 0 : gracePeriodMs));
+      // Always apply 15-minute grace period regardless of next slot
+      const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
 
       if (now > penaltyThreshold) {
         const penaltyAmount = b.price_per_hour;
-        const reason = isNextSlotBooked
-          ? `Auto-completed: Did not check out from ${b.court_name}. Next slot was already booked.`
-          : `Auto-completed: Did not check out from ${b.court_name}. Exceeded 15-minute grace period.`;
+        const reason = `Auto-completed: Did not check out from ${b.court_name}. Exceeded 15-minute grace period.`;
 
         await pool.query(
           `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
