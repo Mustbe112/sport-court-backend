@@ -21,9 +21,19 @@ function buildDateTime(dateField, timeStr) {
 exports.checkAvailability = async (req, res) => {
   const { court_id, date, start_time, end_time } = req.body;
 
+  // Helper: add minutes to a "HH:MM:SS" string, returns "HH:MM:SS"
+  function addMinutesToTime(timeStr, minutes) {
+    const [h, m, s] = timeStr.split(':').map(Number);
+    const total = h * 60 + m + minutes;
+    const hh = String(Math.floor(total / 60) % 24).padStart(2, '0');
+    const mm = String(total % 60).padStart(2, '0');
+    return `${hh}:${mm}:${s !== undefined ? String(s).padStart(2, '0') : '00'}`;
+  }
+
   try {
+    // Check for direct conflicts (existing booking overlaps requested slot)
     const [conflicts] = await pool.query(
-      `SELECT id FROM bookings
+      `SELECT id, end_time FROM bookings
        WHERE court_id = ?
        AND date = ?
        AND status IN ('booked', 'confirmed')
@@ -34,6 +44,56 @@ exports.checkAvailability = async (req, res) => {
 
     if (conflicts.length > 0) {
       return res.json({ available: false, reason: 'Time slot already booked' });
+    }
+
+    // Check 15-minute buffer: is there a booking that ends within 15 min before our start?
+    // i.e. another booking's end_time is between (start_time - 15min) and start_time
+    const [bufferConflicts] = await pool.query(
+      `SELECT id, end_time FROM bookings
+       WHERE court_id = ?
+       AND date = ?
+       AND status IN ('booked', 'confirmed')
+       AND end_time > SUBTIME(?, '00:15:00')
+       AND end_time <= ?`,
+      [court_id, date, start_time, start_time]
+    );
+
+    if (bufferConflicts.length > 0) {
+      const prevEndTime = bufferConflicts[0].end_time;
+      // Show the time string correctly whether it's a full datetime or time-only
+      const timeOnly = prevEndTime.includes('T')
+        ? prevEndTime.split('T')[1].slice(0, 8)
+        : String(prevEndTime).slice(0, 8);
+      const nextAvailable = addMinutesToTime(timeOnly, 15);
+      return res.json({
+        available: false,
+        reason: `There is a 15-minute maintenance gap after the previous booking. Earliest available start time is ${nextAvailable}.`,
+        next_available_time: nextAvailable
+      });
+    }
+
+    // Check if our end_time conflicts with the 15-min buffer of a future booking
+    // i.e. a booking starts less than 15 min after our end_time
+    const [futureBufferConflicts] = await pool.query(
+      `SELECT id, start_time FROM bookings
+       WHERE court_id = ?
+       AND date = ?
+       AND status IN ('booked', 'confirmed')
+       AND start_time >= ?
+       AND start_time < ADDTIME(?, '00:15:00')`,
+      [court_id, date, end_time, end_time]
+    );
+
+    if (futureBufferConflicts.length > 0) {
+      const nextStart = futureBufferConflicts[0].start_time;
+      const timeOnly = nextStart.includes('T')
+        ? nextStart.split('T')[1].slice(0, 8)
+        : String(nextStart).slice(0, 8);
+      return res.json({
+        available: false,
+        reason: `Your end time is too close to the next booking at ${timeOnly}. Please end at least 15 minutes before the next booking starts.`,
+        next_booking_start: timeOnly
+      });
     }
 
     const [maintenance] = await pool.query(
@@ -109,14 +169,14 @@ exports.createBooking = async (req, res) => {
        WHERE court_id = ?
        AND date = ?
        AND status IN ('booked', 'confirmed')
-       AND start_time < ?
-       AND end_time > ?`,
+       AND start_time < ADDTIME(?, '00:15:00')
+       AND ADDTIME(end_time, '00:15:00') > ?`,
       [court_id, date, end_time, start_time]
     );
 
     if (conflicts.length > 0) {
       await conn.rollback();
-      return res.status(400).json({ message: 'Time slot not available' });
+      return res.status(400).json({ message: 'Time slot not available (includes 15-minute maintenance gap)' });
     }
 
     const [maintenance] = await conn.query(
