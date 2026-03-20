@@ -522,3 +522,78 @@ exports.getRevenueTrend = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+// ================= PASSWORD MANAGEMENT =================
+
+exports.getPendingResets = async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, name, email, created_at 
+       FROM users 
+       WHERE password_reset_pending = 1
+       ORDER BY created_at ASC`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("GET PENDING RESETS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.adminResetUserPassword = async (req, res) => {
+  const { id } = req.params;
+  const bcrypt = require('bcrypt');
+
+  try {
+    const [[user]] = await pool.query(
+      'SELECT id, email, name FROM users WHERE id = ?',
+      [id]
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Generate a simple temp password: "Sport" + random 4 digits
+    const tempPassword = 'Sport' + Math.floor(1000 + Math.random() * 9000);
+
+    // Generate a new recovery ID: "RC" + random 6 digits
+    const newRecoveryId = 'RC' + Math.floor(100000 + Math.random() * 900000);
+
+    const hashedPassword   = await bcrypt.hash(tempPassword, 10);
+    const hashedRecoveryId = await bcrypt.hash(newRecoveryId, 10);
+
+    await pool.query(
+      `UPDATE users 
+       SET password_hash = ?, 
+           temp_password = ?,
+           recovery_id = ?,
+           recovery_id_plain = ?,
+           password_reset_pending = 0
+       WHERE id = ?`,
+      [hashedPassword, tempPassword, hashedRecoveryId, newRecoveryId, id]
+    );
+
+    res.json({
+      message: 'Password reset successfully',
+      temp_password: tempPassword,
+      new_recovery_id: newRecoveryId,
+      user_email: user.email
+    });
+  } catch (err) {
+    console.error("ADMIN RESET PASSWORD ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getAllUsers = async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, name, email, coin_balance, penalty, role, password_reset_pending, created_at
+       FROM users ORDER BY created_at DESC`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("GET ALL USERS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};

@@ -5,7 +5,6 @@ const admin = require('../middlewares/adminMiddleware');
 const adminController = require('../controllers/adminController');
 const bookingController = require('../controllers/bookingController');
 
-// Apply auth and admin middleware to ALL routes in this file
 router.use(auth);
 router.use(admin);
 
@@ -14,7 +13,7 @@ router.post('/courts', adminController.createCourt);
 router.put('/courts/:id', adminController.updateCourt);
 router.get('/courts', adminController.getAllCourts);
 
-// ⭐ MAINTENANCE ROUTES (ADD THESE)
+// Maintenance
 router.post('/courts/:id/maintenance', adminController.scheduleMaintenance);
 router.get('/maintenance', adminController.getCourtMaintenance);
 router.delete('/maintenance/:id', adminController.deleteMaintenance);
@@ -40,7 +39,12 @@ router.get('/stats/peak-hours', adminController.getPeakHours);
 router.get('/stats/cancellation-rate', adminController.getCancellationRate);
 router.get('/stats/revenue', adminController.getRevenueTrend);
 
-// Test endpoint
+// Password Management
+router.get('/users', adminController.getAllUsers);
+router.get('/users/pending-resets', adminController.getPendingResets);
+router.post('/users/:id/reset-password', adminController.adminResetUserPassword);
+
+// Test
 router.get('/test', (req, res) => {
   res.json({ message: 'ADMIN ROUTES WORK', user: req.user });
 });
