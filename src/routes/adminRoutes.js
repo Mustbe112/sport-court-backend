@@ -44,6 +44,15 @@ router.get('/users', adminController.getAllUsers);
 router.get('/users/pending-resets', adminController.getPendingResets);
 router.post('/users/:id/reset-password', adminController.adminResetUserPassword);
 
+// Suspension Management
+router.get('/suspensions', adminController.getSuspendedUsers);
+router.post('/users/:id/suspend', adminController.suspendUser);
+router.post('/users/:id/unsuspend', adminController.unsuspendUser);
+
+// Appeals
+router.get('/appeals', adminController.getAppeals);
+router.post('/appeals/:id/resolve', adminController.resolveAppeal);
+
 // Test
 router.get('/test', (req, res) => {
   res.json({ message: 'ADMIN ROUTES WORK', user: req.user });

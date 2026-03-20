@@ -597,3 +597,154 @@ exports.getAllUsers = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+// ================= SUSPENSION MANAGEMENT =================
+
+exports.getSuspendedUsers = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        u.id, u.name, u.email, u.suspended_until, u.suspension_reason,
+        COUNT(p.id) AS late_checkout_count,
+        MAX(p.created_at) AS last_late_checkout
+      FROM users u
+      LEFT JOIN penalties p ON u.id = p.user_id AND p.type = 'late_checkout'
+      WHERE u.suspended_until IS NOT NULL AND u.suspended_until > NOW()
+      GROUP BY u.id
+      ORDER BY u.suspended_until ASC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error("GET SUSPENDED USERS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.suspendUser = async (req, res) => {
+  const { id } = req.params;
+  const { reason, days } = req.body;
+
+  try {
+    const suspendDays = days || 7;
+    const suspendUntil = new Date();
+    suspendUntil.setDate(suspendUntil.getDate() + suspendDays);
+
+    await pool.query(
+      `UPDATE users SET suspended_until = ?, suspension_reason = ? WHERE id = ?`,
+      [suspendUntil, reason || 'Suspended by admin', id]
+    );
+
+    await createNotification(
+      id,
+      'Account Suspended',
+      `Your account has been suspended for ${suspendDays} days. Reason: ${reason || 'Suspended by admin'}. You can submit an appeal on the suspension page.`
+    );
+
+    res.json({ message: `User suspended for ${suspendDays} days` });
+  } catch (err) {
+    console.error("SUSPEND USER ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.unsuspendUser = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await pool.query(
+      `UPDATE users SET suspended_until = NULL, suspension_reason = NULL WHERE id = ?`,
+      [id]
+    );
+
+    // Also mark all unresolved late_checkout penalties as resolved
+    await pool.query(
+      `UPDATE penalties SET resolved = 1 WHERE user_id = ? AND type = 'late_checkout' AND resolved = 0`,
+      [id]
+    );
+
+    await createNotification(
+      id,
+      'Suspension Lifted',
+      'Your account suspension has been lifted by the admin. You can now make bookings again.'
+    );
+
+    res.json({ message: 'User unsuspended successfully' });
+  } catch (err) {
+    console.error("UNSUSPEND USER ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ================= APPEALS =================
+
+exports.getAppeals = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        a.id, a.user_id, a.message, a.status, a.admin_note, a.created_at,
+        u.name, u.email, u.suspended_until, u.suspension_reason,
+        COUNT(p.id) AS late_checkout_count,
+        MAX(p.created_at) AS last_late_checkout
+      FROM appeals a
+      JOIN users u ON a.user_id = u.id
+      LEFT JOIN penalties p ON u.id = p.user_id AND p.type = 'late_checkout'
+      GROUP BY a.id
+      ORDER BY a.created_at DESC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error("GET APPEALS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.resolveAppeal = async (req, res) => {
+  const { id } = req.params;
+  const { action, admin_note } = req.body; // action: 'approve' or 'reject'
+
+  try {
+    const [[appeal]] = await pool.query(
+      'SELECT * FROM appeals WHERE id = ?',
+      [id]
+    );
+
+    if (!appeal) {
+      return res.status(404).json({ error: 'Appeal not found' });
+    }
+
+    await pool.query(
+      `UPDATE appeals SET status = ?, admin_note = ? WHERE id = ?`,
+      [action === 'approve' ? 'approved' : 'rejected', admin_note || '', id]
+    );
+
+    if (action === 'approve') {
+      // Lift suspension
+      await pool.query(
+        `UPDATE users SET suspended_until = NULL, suspension_reason = NULL WHERE id = ?`,
+        [appeal.user_id]
+      );
+
+      // Resolve penalties
+      await pool.query(
+        `UPDATE penalties SET resolved = 1 WHERE user_id = ? AND type = 'late_checkout' AND resolved = 0`,
+        [appeal.user_id]
+      );
+
+      await createNotification(
+        appeal.user_id,
+        'Appeal Approved ✅',
+        `Your appeal has been approved. Your suspension has been lifted. ${admin_note ? 'Admin note: ' + admin_note : ''}`
+      );
+    } else {
+      await createNotification(
+        appeal.user_id,
+        'Appeal Rejected',
+        `Your appeal has been reviewed and rejected. ${admin_note ? 'Reason: ' + admin_note : 'Your suspension remains in effect.'}`
+      );
+    }
+
+    res.json({ message: `Appeal ${action === 'approve' ? 'approved' : 'rejected'} successfully` });
+  } catch (err) {
+    console.error("RESOLVE APPEAL ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};

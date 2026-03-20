@@ -256,3 +256,76 @@ exports.resetCredentials = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+/* ============================
+   CHECK SUSPENSION STATUS (user)
+============================ */
+exports.getSuspensionStatus = async (req, res) => {
+  const user_id = req.user.id;
+  try {
+    const [[user]] = await pool.query(
+      `SELECT suspended_until, suspension_reason FROM users WHERE id = ?`,
+      [user_id]
+    );
+
+    if (!user.suspended_until || new Date(user.suspended_until) <= new Date()) {
+      return res.json({ suspended: false });
+    }
+
+    // Check if user has a pending appeal
+    const [[appeal]] = await pool.query(
+      `SELECT id, status FROM appeals WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`,
+      [user_id]
+    );
+
+    // Count late checkouts
+    const [[lateCount]] = await pool.query(
+      `SELECT COUNT(*) AS cnt FROM penalties
+       WHERE user_id = ? AND type = 'late_checkout'`,
+      [user_id]
+    );
+
+    res.json({
+      suspended: true,
+      suspended_until: user.suspended_until,
+      suspension_reason: user.suspension_reason,
+      late_checkout_count: lateCount.cnt,
+      appeal: appeal || null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/* ============================
+   SUBMIT APPEAL (user)
+============================ */
+exports.submitAppeal = async (req, res) => {
+  const user_id = req.user.id;
+  const { message } = req.body;
+
+  try {
+    if (!message || message.trim().length < 10) {
+      return res.status(400).json({ message: 'Appeal message must be at least 10 characters' });
+    }
+
+    // Check if already has a pending appeal
+    const [[existing]] = await pool.query(
+      `SELECT id FROM appeals WHERE user_id = ? AND status = 'pending'`,
+      [user_id]
+    );
+
+    if (existing) {
+      return res.status(400).json({ message: 'You already have a pending appeal. Please wait for admin review.' });
+    }
+
+    await pool.query(
+      `INSERT INTO appeals (user_id, message) VALUES (?, ?)`,
+      [user_id, message.trim()]
+    );
+
+    res.json({ message: 'Appeal submitted successfully. Admin will review it shortly.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};

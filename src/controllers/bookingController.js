@@ -200,9 +200,29 @@ exports.createBooking = async (req, res) => {
     );
 
     const [[user]] = await conn.query(
-      'SELECT coin_balance, penalty FROM users WHERE id = ?',
+      'SELECT coin_balance, penalty, suspended_until, suspension_reason FROM users WHERE id = ?',
       [user_id]
     );
+
+    // Check if user is suspended
+    if (user.suspended_until) {
+      const suspendedUntil = new Date(user.suspended_until);
+      const now = new Date();
+      if (suspendedUntil > now) {
+        await conn.rollback();
+        return res.status(403).json({
+          suspended: true,
+          message: 'Your account is suspended. You cannot make bookings.',
+          suspended_until: user.suspended_until,
+          suspension_reason: user.suspension_reason
+        });
+      }
+      // Suspension expired — clear it automatically
+      await conn.query(
+        `UPDATE users SET suspended_until = NULL, suspension_reason = NULL WHERE id = ?`,
+        [user_id]
+      );
+    }
 
     const startTime = new Date(`1970-01-01 ${start_time}`);
     const endTime = new Date(`1970-01-01 ${end_time}`);
@@ -358,6 +378,30 @@ exports.checkOut = async (req, res) => {
         `You checked out late from ${booking.court_name}. A penalty of ${penaltyAmount} coins (1-hour court fee) will be charged on your next booking.`
       );
 
+      // Check late checkout count — suspend if 2 or more
+      const [[lateCount]] = await pool.query(
+        `SELECT COUNT(*) AS cnt FROM penalties
+         WHERE user_id = ? AND type = 'late_checkout' AND resolved = 0`,
+        [booking.user_id]
+      );
+
+      if (lateCount.cnt >= 2) {
+        const suspendUntil = new Date();
+        suspendUntil.setDate(suspendUntil.getDate() + 7);
+        const reason = `Suspended for 7 days due to ${lateCount.cnt} late checkouts.`;
+
+        await pool.query(
+          `UPDATE users SET suspended_until = ?, suspension_reason = ? WHERE id = ?`,
+          [suspendUntil, reason, booking.user_id]
+        );
+
+        await createNotification(
+          booking.user_id,
+          'Account Suspended',
+          `Your account has been suspended for 7 days due to repeated late checkouts (${lateCount.cnt} times). You can appeal this decision on the suspension page.`
+        );
+      }
+
       await pool.query(
         `UPDATE bookings SET status = 'completed' WHERE id = ?`,
         [bookingId]
@@ -427,6 +471,30 @@ exports.autoComplete = async (req, res) => {
           'Late Checkout Penalty',
           `You did not check out from ${b.court_name} on time. A penalty of ${penaltyAmount} coins will be charged on your next booking.`
         );
+
+        // Check late checkout count — suspend if 2 or more
+        const [[lateCount]] = await pool.query(
+          `SELECT COUNT(*) AS cnt FROM penalties
+           WHERE user_id = ? AND type = 'late_checkout' AND resolved = 0`,
+          [b.user_id]
+        );
+
+        if (lateCount.cnt >= 2) {
+          const suspendUntil = new Date();
+          suspendUntil.setDate(suspendUntil.getDate() + 7);
+          const suspReason = `Suspended for 7 days due to ${lateCount.cnt} late checkouts.`;
+
+          await pool.query(
+            `UPDATE users SET suspended_until = ?, suspension_reason = ? WHERE id = ?`,
+            [suspendUntil, suspReason, b.user_id]
+          );
+
+          await createNotification(
+            b.user_id,
+            'Account Suspended',
+            `Your account has been suspended for 7 days due to repeated late checkouts (${lateCount.cnt} times). You can appeal this decision on the suspension page.`
+          );
+        }
       }
 
       await pool.query(
