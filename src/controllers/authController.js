@@ -59,6 +59,22 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: 'Invalid email or password' });
     }
 
+    // Check if user logged in with a temp password (admin reset)
+    const usedTempPassword = user.temp_password
+      ? await bcrypt.compare(password, await bcrypt.hash(user.temp_password, 10).then(() => user.password_hash).catch(() => ''))
+      : false;
+
+    // Simpler check: if temp_password exists and matches what was stored
+    const isTempLogin = !!user.temp_password && (password === user.temp_password);
+
+    if (isTempLogin) {
+      // Clear temp_password immediately — one time use only
+      await pool.query(
+        'UPDATE users SET temp_password = NULL WHERE id = ?',
+        [user.id]
+      );
+    }
+
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
       process.env.JWT_SECRET,
@@ -67,6 +83,7 @@ exports.login = async (req, res) => {
 
     res.json({
       token,
+      force_reset: isTempLogin,   // tells frontend to redirect to reset page
       user: {
         id: user.id,
         name: user.name,
@@ -198,6 +215,43 @@ exports.getAllCourts = async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM courts');
     res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/* ============================
+   RESET CREDENTIALS (after admin reset)
+   User sets their own new password + recovery ID
+============================ */
+exports.resetCredentials = async (req, res) => {
+  const { new_password, new_recovery_id } = req.body;
+  const user_id = req.user.id;
+
+  try {
+    if (!new_password || new_password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+
+    if (!new_recovery_id || new_recovery_id.trim().length < 4) {
+      return res.status(400).json({ message: 'Recovery ID must be at least 4 characters' });
+    }
+
+    const hashedPassword   = await bcrypt.hash(new_password, 10);
+    const hashedRecoveryId = await bcrypt.hash(new_recovery_id.trim(), 10);
+
+    await pool.query(
+      `UPDATE users 
+       SET password_hash = ?, 
+           recovery_id = ?,
+           recovery_id_plain = ?,
+           temp_password = NULL,
+           password_reset_pending = 0
+       WHERE id = ?`,
+      [hashedPassword, hashedRecoveryId, new_recovery_id.trim(), user_id]
+    );
+
+    res.json({ message: 'Credentials updated successfully!' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
