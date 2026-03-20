@@ -651,7 +651,7 @@ exports.unsuspendUser = async (req, res) => {
 
   try {
     await pool.query(
-      `UPDATE users SET suspended_until = NULL, suspension_reason = NULL WHERE id = ?`,
+      `UPDATE users SET suspended_until = NULL WHERE id = ?`,
       [id]
     );
 
@@ -687,7 +687,8 @@ exports.getAppeals = async (req, res) => {
       FROM appeals a
       JOIN users u ON a.user_id = u.id
       LEFT JOIN penalties p ON u.id = p.user_id AND p.type = 'late_checkout'
-      GROUP BY a.id
+      GROUP BY a.id, a.user_id, a.message, a.status, a.admin_note, a.created_at,
+               u.name, u.email, u.suspended_until, u.suspension_reason
       ORDER BY a.created_at DESC
     `);
     res.json(rows);
@@ -719,7 +720,7 @@ exports.resolveAppeal = async (req, res) => {
     if (action === 'approve') {
       // Lift suspension
       await pool.query(
-        `UPDATE users SET suspended_until = NULL, suspension_reason = NULL WHERE id = ?`,
+        `UPDATE users SET suspended_until = NULL WHERE id = ?`,
         [appeal.user_id]
       );
 
