@@ -53,6 +53,9 @@ router.post('/users/:id/unsuspend', adminController.unsuspendUser);
 router.get('/appeals', adminController.getAppeals);
 router.post('/appeals/:id/resolve', adminController.resolveAppeal);
 
+// Reports
+router.get('/reports', adminController.getReportData);
+
 // Test
 router.get('/test', (req, res) => {
   res.json({ message: 'ADMIN ROUTES WORK', user: req.user });

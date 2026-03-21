@@ -749,3 +749,97 @@ exports.resolveAppeal = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+// ================= REPORTS =================
+
+exports.getReportData = async (req, res) => {
+  const { from, to } = req.query;
+
+  // Default: last 30 days
+  const dateFrom = from || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const dateTo   = to   || new Date().toISOString().slice(0, 10);
+
+  try {
+    // Revenue by date
+    const [revenueByDate] = await pool.query(`
+      SELECT DATE(created_at) AS date, SUM(total_price) AS revenue, COUNT(*) AS bookings
+      FROM bookings
+      WHERE (status = 'confirmed' OR status = 'completed')
+        AND DATE(created_at) BETWEEN ? AND ?
+      GROUP BY DATE(created_at)
+      ORDER BY DATE(created_at)
+    `, [dateFrom, dateTo]);
+
+    // Revenue by court
+    const [revenueByCourt] = await pool.query(`
+      SELECT c.name AS court_name, c.type AS court_type,
+             COUNT(b.id) AS total_bookings,
+             SUM(b.total_price) AS total_revenue,
+             AVG(b.total_price) AS avg_revenue
+      FROM bookings b
+      JOIN courts c ON b.court_id = c.id
+      WHERE (b.status = 'confirmed' OR b.status = 'completed')
+        AND DATE(b.created_at) BETWEEN ? AND ?
+      GROUP BY c.id, c.name, c.type
+      ORDER BY total_revenue DESC
+    `, [dateFrom, dateTo]);
+
+    // Booking status summary
+    const [bookingStatus] = await pool.query(`
+      SELECT status, COUNT(*) AS count, COALESCE(SUM(total_price), 0) AS total_value
+      FROM bookings
+      WHERE DATE(created_at) BETWEEN ? AND ?
+      GROUP BY status
+    `, [dateFrom, dateTo]);
+
+    // Cancellation details
+    const [cancellations] = await pool.query(`
+      SELECT b.id, u.name AS user_name, u.email, c.name AS court_name,
+             b.date, b.start_time, b.end_time, b.total_price, b.created_at
+      FROM bookings b
+      JOIN users u ON b.user_id = u.id
+      JOIN courts c ON b.court_id = c.id
+      WHERE b.status = 'cancelled'
+        AND DATE(b.created_at) BETWEEN ? AND ?
+      ORDER BY b.created_at DESC
+    `, [dateFrom, dateTo]);
+
+    // Penalties summary
+    const [penalties] = await pool.query(`
+      SELECT u.name AS user_name, u.email,
+             COUNT(p.id) AS penalty_count,
+             SUM(p.amount) AS total_penalty_amount,
+             MAX(p.created_at) AS last_penalty
+      FROM penalties p
+      JOIN users u ON p.user_id = u.id
+      WHERE DATE(p.created_at) BETWEEN ? AND ?
+      GROUP BY p.user_id, u.name, u.email
+      ORDER BY penalty_count DESC
+    `, [dateFrom, dateTo]);
+
+    // Top users by spend
+    const [topUsers] = await pool.query(`
+      SELECT u.name, u.email, COUNT(b.id) AS total_bookings,
+             SUM(b.total_price) AS total_spent
+      FROM bookings b
+      JOIN users u ON b.user_id = u.id
+      WHERE (b.status = 'confirmed' OR b.status = 'completed')
+        AND DATE(b.created_at) BETWEEN ? AND ?
+      GROUP BY u.id, u.name, u.email
+      ORDER BY total_spent DESC
+      LIMIT 20
+    `, [dateFrom, dateTo]);
+
+    res.json({
+      period: { from: dateFrom, to: dateTo },
+      revenue_by_date: revenueByDate,
+      revenue_by_court: revenueByCourt,
+      booking_status: bookingStatus,
+      cancellations: cancellations,
+      penalties: penalties,
+      top_users: topUsers
+    });
+  } catch (err) {
+    console.error("REPORT DATA ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
