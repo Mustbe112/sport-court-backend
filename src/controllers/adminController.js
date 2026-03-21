@@ -802,7 +802,7 @@ exports.getActiveCases = async (req, res) => {
         )
       WHERE u.suspended_until IS NOT NULL
         AND u.suspended_until > NOW()
-        AND YEAR(u.suspended_until) < 2099
+        AND u.suspended_until < '2099-01-01'
       GROUP BY u.id, u.name, u.email, u.suspended_until, u.suspension_reason,
                a.id, a.message, a.status, a.admin_note, a.created_at
       ORDER BY
@@ -827,7 +827,7 @@ exports.getBannedUsers = async (req, res) => {
         MAX(p.created_at) AS last_late_checkout
       FROM users u
       LEFT JOIN penalties p ON u.id = p.user_id AND p.type = 'late_checkout'
-      WHERE u.suspended_until IS NOT NULL AND YEAR(u.suspended_until) >= 2099
+      WHERE u.suspended_until IS NOT NULL AND u.suspended_until >= '2099-01-01'
       GROUP BY u.id, u.name, u.email, u.suspended_until, u.suspension_reason
       ORDER BY u.name ASC
     `);
