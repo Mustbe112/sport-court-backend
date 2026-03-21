@@ -44,7 +44,7 @@ exports.login = async (req, res) => {
 
   try {
     const [users] = await pool.query(
-      'SELECT * FROM users WHERE email = ?',
+      'SELECT *, suspended_until FROM users WHERE email = ?',
       [email]
     );
 
@@ -81,9 +81,14 @@ exports.login = async (req, res) => {
       { expiresIn: '7d' }
     );
 
+    // Check if the user is currently suspended or permanently banned
+    const isSuspended =
+      user.suspended_until && new Date(user.suspended_until) > new Date();
+
     res.json({
       token,
       force_reset: isTempLogin,   // tells frontend to redirect to reset page
+      suspended: isSuspended,     // tells frontend to redirect to suspended page
       user: {
         id: user.id,
         name: user.name,
