@@ -698,6 +698,70 @@ exports.getAppeals = async (req, res) => {
   }
 };
 
+// ================= ACTIVE CASES (suspended + their appeal merged) =================
+
+exports.getActiveCases = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT
+        u.id, u.name, u.email, u.suspended_until, u.suspension_reason,
+        COUNT(DISTINCT p.id)   AS late_checkout_count,
+        MAX(p.created_at)      AS last_late_checkout,
+        a.id                   AS appeal_id,
+        a.message              AS appeal_message,
+        a.status               AS appeal_status,
+        a.admin_note           AS appeal_admin_note,
+        a.created_at           AS appeal_created_at
+      FROM users u
+      LEFT JOIN penalties p
+        ON u.id = p.user_id AND p.type = 'late_checkout'
+      LEFT JOIN appeals a
+        ON u.id = a.user_id
+        AND a.id = (
+          SELECT id FROM appeals
+          WHERE user_id = u.id
+          AND status IN ('pending','rejected')
+          ORDER BY created_at DESC
+          LIMIT 1
+        )
+      WHERE u.suspended_until IS NOT NULL
+        AND u.suspended_until > NOW()
+        AND YEAR(u.suspended_until) < 2099
+      GROUP BY u.id, u.name, u.email, u.suspended_until, u.suspension_reason,
+               a.id, a.message, a.status, a.admin_note, a.created_at
+      ORDER BY
+        CASE WHEN a.status = 'pending' THEN 0 ELSE 1 END,
+        u.suspended_until ASC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error("GET ACTIVE CASES ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ================= BANNED USERS =================
+
+exports.getBannedUsers = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT
+        u.id, u.name, u.email, u.suspended_until, u.suspension_reason,
+        COUNT(p.id) AS late_checkout_count,
+        MAX(p.created_at) AS last_late_checkout
+      FROM users u
+      LEFT JOIN penalties p ON u.id = p.user_id AND p.type = 'late_checkout'
+      WHERE u.suspended_until IS NOT NULL AND YEAR(u.suspended_until) >= 2099
+      GROUP BY u.id, u.name, u.email, u.suspended_until, u.suspension_reason
+      ORDER BY u.name ASC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error("GET BANNED USERS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.resolveAppeal = async (req, res) => {
   const { id } = req.params;
   const { action, admin_note } = req.body; // action: 'approve' or 'reject'

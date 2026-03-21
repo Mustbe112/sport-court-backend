@@ -46,6 +46,8 @@ router.post('/users/:id/reset-password', adminController.adminResetUserPassword)
 
 // Suspension Management
 router.get('/suspensions', adminController.getSuspendedUsers);
+router.get('/active-cases', adminController.getActiveCases);
+router.get('/banned', adminController.getBannedUsers);
 router.post('/users/:id/suspend', adminController.suspendUser);
 router.post('/users/:id/unsuspend', adminController.unsuspendUser);
 router.post('/users/:id/ban', adminController.banUser);
