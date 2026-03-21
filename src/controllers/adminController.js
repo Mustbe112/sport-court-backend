@@ -749,3 +749,28 @@ exports.resolveAppeal = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+exports.banUser = async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+
+  try {
+    // Set suspended_until to far future = permanent ban
+    const banUntil = new Date('2099-01-01');
+
+    await pool.query(
+      `UPDATE users SET suspended_until = ?, suspension_reason = ? WHERE id = ?`,
+      [banUntil, reason || 'Permanently banned by admin', id]
+    );
+
+    await createNotification(
+      id,
+      '🔨 Account Permanently Banned',
+      `Your account has been permanently banned. Reason: ${reason || 'Violated platform rules'}. You may submit an appeal if you believe this is a mistake.`
+    );
+
+    res.json({ message: 'User permanently banned' });
+  } catch (err) {
+    console.error("BAN USER ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};

@@ -48,6 +48,7 @@ router.post('/users/:id/reset-password', adminController.adminResetUserPassword)
 router.get('/suspensions', adminController.getSuspendedUsers);
 router.post('/users/:id/suspend', adminController.suspendUser);
 router.post('/users/:id/unsuspend', adminController.unsuspendUser);
+router.post('/users/:id/ban', adminController.banUser);
 
 // Appeals
 router.get('/appeals', adminController.getAppeals);
