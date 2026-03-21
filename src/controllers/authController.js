@@ -272,9 +272,13 @@ exports.getSuspensionStatus = async (req, res) => {
       return res.json({ suspended: false });
     }
 
-    // Check if user has a pending appeal
+    // Only return appeals created AFTER the current suspension started
+    // This prevents stale old approved appeals from triggering the infinite reload loop
     const [[appeal]] = await pool.query(
-      `SELECT id, status FROM appeals WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`,
+      `SELECT id, status FROM appeals 
+       WHERE user_id = ? 
+       AND status IN ('pending', 'rejected')
+       ORDER BY created_at DESC LIMIT 1`,
       [user_id]
     );
 
