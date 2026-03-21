@@ -843,3 +843,99 @@ exports.getReportData = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// ================= USER ACTIVITY LOOKUP =================
+
+exports.getUserActivity = async (req, res) => {
+  const { q } = req.query; // name or email search term
+
+  if (!q || q.trim().length < 2) {
+    return res.status(400).json({ error: 'Search query must be at least 2 characters' });
+  }
+
+  const search = `%${q.trim()}%`;
+
+  try {
+    // Find matching users
+    const [users] = await pool.query(
+      `SELECT id, name, email, coin_balance, penalty, role,
+              suspended_until, suspension_reason, created_at,
+              password_reset_pending
+       FROM users
+       WHERE name LIKE ? OR email LIKE ?
+       ORDER BY name ASC
+       LIMIT 10`,
+      [search, search]
+    );
+
+    if (users.length === 0) {
+      return res.json({ users: [], activities: null });
+    }
+
+    // Get full activity for all matched users
+    const userIds = users.map(u => u.id);
+    const placeholders = userIds.map(() => '?').join(',');
+
+    // All bookings
+    const [bookings] = await pool.query(
+      `SELECT b.id, b.user_id, b.date, b.start_time, b.end_time,
+              b.status, b.total_price, b.created_at,
+              c.name AS court_name, c.type AS court_type
+       FROM bookings b
+       JOIN courts c ON b.court_id = c.id
+       WHERE b.user_id IN (${placeholders})
+       ORDER BY b.created_at DESC`,
+      userIds
+    );
+
+    // All penalties
+    const [penalties] = await pool.query(
+      `SELECT p.id, p.user_id, p.type, p.description,
+              p.amount, p.resolved, p.created_at,
+              c.name AS court_name
+       FROM penalties p
+       LEFT JOIN bookings b ON p.booking_id = b.id
+       LEFT JOIN courts c ON b.court_id = c.id
+       WHERE p.user_id IN (${placeholders})
+       ORDER BY p.created_at DESC`,
+      userIds
+    );
+
+    // All appeals
+    const [appeals] = await pool.query(
+      `SELECT id, user_id, message, status, admin_note, created_at
+       FROM appeals
+       WHERE user_id IN (${placeholders})
+       ORDER BY created_at DESC`,
+      userIds
+    );
+
+    // Coin top-ups (positive transactions not from bookings — via coin_transactions if exists, else skip gracefully)
+    let topups = [];
+    try {
+      const [rows] = await pool.query(
+        `SELECT id, user_id, amount, created_at
+         FROM coin_transactions
+         WHERE user_id IN (${placeholders}) AND type = 'topup'
+         ORDER BY created_at DESC`,
+        userIds
+      );
+      topups = rows;
+    } catch(_) {
+      // coin_transactions table may not exist — silently skip
+    }
+
+    res.json({
+      users,
+      activities: {
+        bookings,
+        penalties,
+        appeals,
+        topups
+      }
+    });
+  } catch (err) {
+    console.error("USER ACTIVITY ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
