@@ -283,6 +283,11 @@ exports.createBooking = async (req, res) => {
     const endTime = new Date(`1970-01-01 ${end_time}`);
     const durationHours = (endTime - startTime) / (1000 * 60 * 60);
 
+    if (durationHours < 1) {
+      await conn.rollback();
+      return res.status(400).json({ message: 'Minimum booking duration is 1 hour.' });
+    }
+
     const baseCost      = court.price_per_hour * durationHours;
     const penaltyAmount = user.penalty || 0;
     const totalPrice    = baseCost + penaltyAmount;
