@@ -23,9 +23,22 @@ function nowBangkok() {
  */
 function buildDateTime(dateField, timeStr) {
   // Extract YYYY-MM-DD
-  const datePart = (dateField instanceof Date)
-    ? dateField.toISOString().slice(0, 10)
-    : String(dateField).slice(0, 10);
+  // CRITICAL: Do NOT use .toISOString() on a Date object — MySQL DATE columns come back
+  // as a JS Date set to midnight in the server's LOCAL timezone (e.g. Bangkok midnight).
+  // On Render (UTC server), Bangkok midnight 2026-03-22 00:00 = 2026-03-21T17:00:00Z,
+  // so .toISOString() gives the WRONG day (March 21 instead of March 22).
+  // Fix: use .toLocaleDateString('en-CA') which gives YYYY-MM-DD in LOCAL time.
+  let datePart;
+  if (dateField instanceof Date) {
+    // MySQL DATE/DATETIME comes back as a JS Date at midnight SERVER-local time.
+    // On Render (UTC), Bangkok midnight 2026-03-22 00:00 BKK = 2026-03-21T17:00:00Z.
+    // So we must add the Bangkok offset (+7h) before slicing to get the correct date.
+    datePart = new Date(dateField.getTime() + BANGKOK_OFFSET_MS).toISOString().slice(0, 10);
+  } else {
+    // String: "2026-03-22T00:00:00.000Z" or plain "2026-03-22"
+    // The date portion is always the first 10 chars — no conversion needed.
+    datePart = String(dateField).slice(0, 10);
+  }
 
   // mysql2 returns TIME columns as total seconds (e.g. 72600 for 20:10:00).
   // We must convert to HH:MM:SS before building the Date.
@@ -669,7 +682,7 @@ exports.confirmBooking = async (req, res) => {
       return res.status(400).json({ error: "Cannot check in for past bookings" });
     }
 
-    console.log(`[checkIn] #${bookingId} | raw_start=${JSON.stringify(booking.start_time)} | normalized=${normalizeTime(booking.start_time)} | bookingStart=${bookingStart.toISOString()} | now=${now.toISOString()} | date=${bookingDateStr} | today=${todayStr}`);
+    console.log(`[checkIn] #${bookingId} | raw_date=${JSON.stringify(booking.date)} | raw_start=${JSON.stringify(booking.start_time)} | normalized=${normalizeTime(booking.start_time)} | bookingStart=${bookingStart.toISOString()} | now=${now.toISOString()} | dateStr=${bookingDateStr} | today=${todayStr}`);
 
     // Allow check-in from 30 minutes BEFORE start time
     const earliestCheckIn = new Date(bookingStart.getTime() - 30 * 60 * 1000);
