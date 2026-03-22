@@ -111,6 +111,12 @@ exports.scheduleMaintenance = async (req, res) => {
       conn.release();
     }
 
+    // Mark court as inactive during maintenance
+    await pool.query(
+      'UPDATE courts SET is_active = 0 WHERE id = ?',
+      [id]
+    );
+
     res.json({ 
       message: 'Maintenance scheduled successfully',
       affected_bookings: affectedBookings.length
@@ -141,8 +147,28 @@ exports.deleteMaintenance = async (req, res) => {
   const { id } = req.params;
 
   try {
+    // Find which court this maintenance belongs to
+    const [[maint]] = await pool.query(
+      'SELECT court_id FROM court_maintenance WHERE id = ?', [id]
+    );
+
     await pool.query('DELETE FROM court_maintenance WHERE id = ?', [id]);
-    res.json({ message: 'Maintenance schedule deleted' });
+
+    // Only reactivate if no other active maintenance exists for this court
+    if (maint) {
+      const [remaining] = await pool.query(
+        'SELECT id FROM court_maintenance WHERE court_id = ?',
+        [maint.court_id]
+      );
+      if (remaining.length === 0) {
+        await pool.query(
+          'UPDATE courts SET is_active = 1 WHERE id = ?',
+          [maint.court_id]
+        );
+      }
+    }
+
+    res.json({ message: 'Maintenance cancelled and court reactivated' });
   } catch (err) {
     console.error("DELETE MAINTENANCE ERROR:", err);
     res.status(500).json({ error: err.message });
