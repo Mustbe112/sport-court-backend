@@ -9,9 +9,11 @@ const { createNotification } = require('../utils/notificationUtils');
  * YYYY-MM-DD part before combining with the time.
  */
 function buildDateTime(dateField, timeStr) {
-  // Use local timezone (Bangkok) — NOT toISOString() which gives UTC date
-  const d = (dateField instanceof Date) ? dateField : new Date(dateField);
-  const datePart = d.toLocaleDateString('en-CA'); // "YYYY-MM-DD" in local time
+  // Raw string slice — no timezone conversion, works on any server timezone.
+  // MySQL DATETIME arrives as "2026-03-22T00:00:00.000Z" or "2026-03-22 00:00:00"
+  // Either way slice(0,10) gives the stored YYYY-MM-DD date correctly.
+  const raw      = (dateField instanceof Date) ? dateField.toISOString() : String(dateField);
+  const datePart = raw.slice(0, 10);
   return new Date(`${datePart}T${timeStr}`);
 }
 
@@ -349,16 +351,17 @@ exports.checkOut = async (req, res) => {
       return res.status(404).json({ message: 'Booking not found or not confirmed' });
     }
 
-    // buildDateTime uses raw string slice — timezone-safe
-    const bookingEnd      = buildDateTime(booking.date, booking.end_time);
-    const now             = new Date();
-    const GRACE_PERIOD_MS = 10 * 60 * 1000; // 10 minutes after end_time
-    const penaltyThreshold = new Date(bookingEnd.getTime() + GRACE_PERIOD_MS);
-    const isLate          = now > penaltyThreshold;
+    // FIX: use buildDateTime so MySQL DATETIME field parses correctly
+    const bookingEnd = buildDateTime(booking.date, booking.end_time);
+    const now = new Date();
 
-    if (isLate) {
+    // 10-minute grace period after booking end time
+    const gracePeriodMs    = 10 * 60 * 1000;
+    const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
+
+    if (now > penaltyThreshold) {
       const penaltyAmount = booking.price_per_hour;
-      const lateReason    = `Late checkout from ${booking.court_name}. Exceeded 10-minute grace period.`;
+      const lateReason = `Late checkout from ${booking.court_name}. Exceeded 10-minute grace period.`;
 
       await pool.query(
         `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
@@ -377,7 +380,7 @@ exports.checkOut = async (req, res) => {
         `You checked out late from ${booking.court_name}. A penalty of ${penaltyAmount} coins (1-hour court fee) will be charged on your next booking.`
       );
 
-      // Suspend after 2 unresolved late checkouts
+      // Check late checkout count — suspend if 2 or more
       const [[lateCount]] = await pool.query(
         `SELECT COUNT(*) AS cnt FROM penalties
          WHERE user_id = ? AND type = 'late_checkout' AND resolved = 0`,
@@ -505,13 +508,13 @@ exports.confirmBooking = async (req, res) => {
       return res.status(404).json({ error: "Booking not found or already confirmed" });
     }
 
-    // Both sides use local (Bangkok) timezone for correct date comparison
-    const bookingDateStr = new Date(booking.date).toLocaleDateString('en-CA');
-    // todayStr: also use raw string slice so both sides are timezone-neutral
-    const nowRaw   = new Date().toISOString(); // always UTC ISO string e.g. "2026-03-22T11:00:00.000Z"
-    // Add 7 hours for Bangkok (UTC+7) to get correct local date
-    const bangkokNow = new Date(new Date().getTime() + 7 * 60 * 60 * 1000);
-    const todayStr   = bangkokNow.toISOString().slice(0, 10);
+    // BOTH sides use raw string slice — no timezone conversion at all.
+    // booking.date from MySQL = "2026-03-22T00:00:00.000Z" → slice(0,10) = "2026-03-22"
+    // todayStr: manually add UTC+7 offset so "today" is Bangkok local date on any server.
+    const rawDate        = (booking.date instanceof Date) ? booking.date.toISOString() : String(booking.date);
+    const bookingDateStr = rawDate.slice(0, 10);
+    const bangkokNow     = new Date(Date.now() + 7 * 60 * 60 * 1000);
+    const todayStr       = bangkokNow.toISOString().slice(0, 10);
 
     if (bookingDateStr < todayStr) {
       return res.status(400).json({ error: "Cannot confirm past bookings" });
