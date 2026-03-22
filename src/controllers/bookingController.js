@@ -22,63 +22,45 @@ function nowBangkok() {
  * (i.e. we store the wall-clock time directly, with no TZ conversion).
  */
 function buildDateTime(dateField, timeStr) {
-  // Extract YYYY-MM-DD
-  // CRITICAL: Do NOT use .toISOString() on a Date object — MySQL DATE columns come back
-  // as a JS Date set to midnight in the server's LOCAL timezone (e.g. Bangkok midnight).
-  // On Render (UTC server), Bangkok midnight 2026-03-22 00:00 = 2026-03-21T17:00:00Z,
-  // so .toISOString() gives the WRONG day (March 21 instead of March 22).
-  // Fix: use .toLocaleDateString('en-CA') which gives YYYY-MM-DD in LOCAL time.
+  // Extract YYYY-MM-DD from whatever MySQL returns (Date object or ISO string)
+  // CRITICAL FIX: booking.date from MySQL arrives as a JS Date object at UTC midnight.
+  // e.g. Bangkok 2026-03-22 00:00 = 2026-03-21T17:00:00Z on Render (UTC server).
+  // .toISOString() gives "2026-03-21" (WRONG). We must shift by +7h first.
   let datePart;
   if (dateField instanceof Date) {
-    // MySQL DATE/DATETIME comes back as a JS Date at midnight SERVER-local time.
-    // On Render (UTC), Bangkok midnight 2026-03-22 00:00 BKK = 2026-03-21T17:00:00Z.
-    // So we must add the Bangkok offset (+7h) before slicing to get the correct date.
     datePart = new Date(dateField.getTime() + BANGKOK_OFFSET_MS).toISOString().slice(0, 10);
   } else {
-    // String: "2026-03-22T00:00:00.000Z" or plain "2026-03-22"
-    // The date portion is always the first 10 chars — no conversion needed.
+    // String form e.g. "2026-03-22T00:00:00.000Z" or "2026-03-22" — first 10 chars are always YYYY-MM-DD
     datePart = String(dateField).slice(0, 10);
   }
 
-  // mysql2 returns TIME columns as total seconds (e.g. 72600 for 20:10:00).
-  // We must convert to HH:MM:SS before building the Date.
+  // MySQL TIME columns can come back in several formats:
+  //   "19:26:00"          — normal string (most common)
+  //   "19:26"             — without seconds
+  //   { hours, minutes }  — object from some MySQL drivers
+  //   70200               — total seconds (duration format from some drivers)
   let timePart;
-  if (typeof timeStr === 'number' || (typeof timeStr === 'string' && /^\d+$/.test(timeStr.trim()))) {
-    // Pure number or numeric string = seconds since midnight
-    const totalSec = Math.abs(Number(timeStr));
-    const hh = String(Math.floor(totalSec / 3600)).padStart(2, '0');
-    const mm = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
-    const ss = String(totalSec % 60).padStart(2, '0');
-    timePart = `${hh}:${mm}:${ss}`;
-  } else if (typeof timeStr === 'object' && timeStr !== null) {
-    // Object form: { hours, minutes, seconds }
+  if (typeof timeStr === 'object' && timeStr !== null && !Array.isArray(timeStr)) {
+    // Object form: { hours: 19, minutes: 26, seconds: 0 } or similar
     const h = String(timeStr.hours   ?? 0).padStart(2, '0');
     const m = String(timeStr.minutes ?? 0).padStart(2, '0');
     const s = String(timeStr.seconds ?? 0).padStart(2, '0');
     timePart = `${h}:${m}:${s}`;
+  } else if (typeof timeStr === 'number') {
+    // Seconds-since-midnight (e.g. 70200 = 19*3600+26*60 = 19:26:00)
+    const totalSec = Math.abs(timeStr);
+    const hh = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+    const mm = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+    const ss = String(totalSec % 60).padStart(2, '0');
+    timePart = `${hh}:${mm}:${ss}`;
   } else {
-    // Normal HH:MM or HH:MM:SS string
+    // String — normalise to HH:MM:SS
     const raw = String(timeStr).slice(0, 8);
     timePart = raw.length === 5 ? raw + ':00' : raw;
   }
 
+  // Build as UTC so it's comparable to nowBangkok() which is also UTC+7-offset
   return new Date(`${datePart}T${timePart}Z`);
-}
-
-/**
- * Normalize a mysql2 TIME value to "HH:MM:SS" string.
- * mysql2 returns TIME columns as total seconds (e.g. 72600 → "20:10:00").
- * Use this whenever displaying or logging a time value from the DB.
- */
-function normalizeTime(timeStr) {
-  if (typeof timeStr === 'number' || (typeof timeStr === 'string' && /^\d+$/.test(String(timeStr).trim()))) {
-    const totalSec = Math.abs(Number(timeStr));
-    const hh = String(Math.floor(totalSec / 3600)).padStart(2, '0');
-    const mm = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
-    const ss = String(totalSec % 60).padStart(2, '0');
-    return `${hh}:${mm}:${ss}`;
-  }
-  return String(timeStr).slice(0, 8);
 }
 
 /**
@@ -603,10 +585,7 @@ exports.autoNoShow = async (req, res) => {
     // FIX: ADDTIME(DATE(b.date), b.start_time) instead of CONCAT(b.date, ' ', b.start_time)
     const [bookings] = await pool.query(
       `SELECT b.id, b.user_id, b.total_price, b.date, b.start_time, b.checked_in,
-              b.court_id, c.price_per_hour, c.name AS court_name,
-              NOW() AS db_now,
-              SEC_TO_TIME(TIME_TO_SEC(b.start_time)) AS start_time_normalized,
-              DATE_FORMAT(DATE(b.date), '%Y-%m-%d') AS date_only
+              b.court_id, c.price_per_hour, c.name AS court_name
        FROM bookings b
        JOIN courts c ON b.court_id = c.id
        WHERE b.status = 'booked'
@@ -618,11 +597,6 @@ exports.autoNoShow = async (req, res) => {
     );
 
     console.log(`📊 Found ${bookings.length} no-show bookings`);
-    if (bookings.length > 0) {
-      bookings.forEach(b => console.log(
-        `  → #${b.id} raw_start=${JSON.stringify(b.start_time)} normalized=${b.start_time_normalized} date=${b.date_only} db_now=${b.db_now}`
-      ));
-    }
 
     for (const b of bookings) {
       console.log(`⚠️ Marking booking #${b.id} as no-show`);
@@ -676,13 +650,16 @@ exports.confirmBooking = async (req, res) => {
     const bookingEnd   = buildDateTime(booking.date, booking.end_time);
 
     // Block check-in for bookings on a past date (not today)
-    const bookingDateStr = String(booking.date).slice(0, 10);
+    // Same fix: booking.date is a Date object at UTC midnight, need Bangkok offset
+    const bookingDateStr = (booking.date instanceof Date)
+      ? new Date(booking.date.getTime() + BANGKOK_OFFSET_MS).toISOString().slice(0, 10)
+      : String(booking.date).slice(0, 10);
     const todayStr = todayBangkok();
     if (bookingDateStr < todayStr) {
       return res.status(400).json({ error: "Cannot check in for past bookings" });
     }
 
-    console.log(`[checkIn] #${bookingId} | raw_date=${JSON.stringify(booking.date)} | raw_start=${JSON.stringify(booking.start_time)} | normalized=${normalizeTime(booking.start_time)} | bookingStart=${bookingStart.toISOString()} | now=${now.toISOString()} | dateStr=${bookingDateStr} | today=${todayStr}`);
+    console.log(`[checkIn] booking #${bookingId} | raw start_time=${JSON.stringify(booking.start_time)} | bookingStart=${bookingStart.toISOString()} | nowBangkok=${now.toISOString()} | date=${bookingDateStr} | today=${todayStr}`);
 
     // Allow check-in from 30 minutes BEFORE start time
     const earliestCheckIn = new Date(bookingStart.getTime() - 30 * 60 * 1000);
