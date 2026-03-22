@@ -497,7 +497,7 @@ exports.autoComplete = async (req, res) => {
        FROM bookings b
        JOIN courts c ON b.court_id = c.id
        WHERE b.status = 'confirmed'
-       AND DATE_ADD(NOW(), INTERVAL 7 HOUR) > ADDTIME(DATE(b.date), b.end_time)`
+       AND NOW() > ADDTIME(DATE(b.date), b.end_time)`
     );
 
     for (const b of bookings) {
@@ -583,7 +583,7 @@ exports.autoNoShow = async (req, res) => {
        JOIN courts c ON b.court_id = c.id
        WHERE b.status = 'booked'
        AND b.checked_in = FALSE
-       AND DATE_ADD(NOW(), INTERVAL 7 HOUR) > DATE_ADD(
+       AND NOW() > DATE_ADD(
          ADDTIME(DATE(b.date), b.start_time),
          INTERVAL 45 MINUTE
        )`
