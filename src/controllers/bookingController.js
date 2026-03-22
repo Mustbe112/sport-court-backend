@@ -22,38 +22,50 @@ function nowBangkok() {
  * (i.e. we store the wall-clock time directly, with no TZ conversion).
  */
 function buildDateTime(dateField, timeStr) {
-  // Extract YYYY-MM-DD from whatever MySQL returns (Date object or ISO string)
+  // Extract YYYY-MM-DD
   const datePart = (dateField instanceof Date)
     ? dateField.toISOString().slice(0, 10)
     : String(dateField).slice(0, 10);
 
-  // MySQL TIME columns can come back in several formats:
-  //   "19:26:00"          — normal string (most common)
-  //   "19:26"             — without seconds
-  //   { hours, minutes }  — object from some MySQL drivers
-  //   70200               — total seconds (duration format from some drivers)
+  // mysql2 returns TIME columns as total seconds (e.g. 72600 for 20:10:00).
+  // We must convert to HH:MM:SS before building the Date.
   let timePart;
-  if (typeof timeStr === 'object' && timeStr !== null && !Array.isArray(timeStr)) {
-    // Object form: { hours: 19, minutes: 26, seconds: 0 } or similar
-    const h = String(timeStr.hours   ?? 0).padStart(2, '0');
-    const m = String(timeStr.minutes ?? 0).padStart(2, '0');
-    const s = String(timeStr.seconds ?? 0).padStart(2, '0');
-    timePart = `${h}:${m}:${s}`;
-  } else if (typeof timeStr === 'number') {
-    // Seconds-since-midnight (e.g. 70200 = 19*3600+26*60 = 19:26:00)
-    const totalSec = Math.abs(timeStr);
+  if (typeof timeStr === 'number' || (typeof timeStr === 'string' && /^\d+$/.test(timeStr.trim()))) {
+    // Pure number or numeric string = seconds since midnight
+    const totalSec = Math.abs(Number(timeStr));
     const hh = String(Math.floor(totalSec / 3600)).padStart(2, '0');
     const mm = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
     const ss = String(totalSec % 60).padStart(2, '0');
     timePart = `${hh}:${mm}:${ss}`;
+  } else if (typeof timeStr === 'object' && timeStr !== null) {
+    // Object form: { hours, minutes, seconds }
+    const h = String(timeStr.hours   ?? 0).padStart(2, '0');
+    const m = String(timeStr.minutes ?? 0).padStart(2, '0');
+    const s = String(timeStr.seconds ?? 0).padStart(2, '0');
+    timePart = `${h}:${m}:${s}`;
   } else {
-    // String — normalise to HH:MM:SS
+    // Normal HH:MM or HH:MM:SS string
     const raw = String(timeStr).slice(0, 8);
     timePart = raw.length === 5 ? raw + ':00' : raw;
   }
 
-  // Build as UTC so it's comparable to nowBangkok() which is also UTC+7-offset
   return new Date(`${datePart}T${timePart}Z`);
+}
+
+/**
+ * Normalize a mysql2 TIME value to "HH:MM:SS" string.
+ * mysql2 returns TIME columns as total seconds (e.g. 72600 → "20:10:00").
+ * Use this whenever displaying or logging a time value from the DB.
+ */
+function normalizeTime(timeStr) {
+  if (typeof timeStr === 'number' || (typeof timeStr === 'string' && /^\d+$/.test(String(timeStr).trim()))) {
+    const totalSec = Math.abs(Number(timeStr));
+    const hh = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+    const mm = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+    const ss = String(totalSec % 60).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  }
+  return String(timeStr).slice(0, 8);
 }
 
 /**
@@ -657,7 +669,7 @@ exports.confirmBooking = async (req, res) => {
       return res.status(400).json({ error: "Cannot check in for past bookings" });
     }
 
-    console.log(`[checkIn] booking #${bookingId} | raw start_time=${JSON.stringify(booking.start_time)} | bookingStart=${bookingStart.toISOString()} | nowBangkok=${now.toISOString()} | date=${bookingDateStr} | today=${todayStr}`);
+    console.log(`[checkIn] #${bookingId} | raw_start=${JSON.stringify(booking.start_time)} | normalized=${normalizeTime(booking.start_time)} | bookingStart=${bookingStart.toISOString()} | now=${now.toISOString()} | date=${bookingDateStr} | today=${todayStr}`);
 
     // Allow check-in from 30 minutes BEFORE start time
     const earliestCheckIn = new Date(bookingStart.getTime() - 30 * 60 * 1000);
