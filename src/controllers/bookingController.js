@@ -427,87 +427,13 @@ exports.checkOut = async (req, res) => {
 };
 
 /* ============================
-   AUTO COMPLETE (CRON)
+   AUTO COMPLETE — REMOVED
+   Bookings are only completed via manual admin checkout or QR scanner.
+   Auto-complete was causing false late-checkout penalties for users
+   who checked out on time or early.
 ============================ */
 exports.autoComplete = async (req, res) => {
-  try {
-    // FIX: ADDTIME(DATE(b.date), b.end_time) instead of CONCAT(b.date, ' ', b.end_time)
-    // CONCAT breaks because the date column is DATETIME, producing an invalid string.
-    const [bookings] = await pool.query(
-      `SELECT b.id, b.user_id, b.court_id, b.date, b.end_time,
-              c.price_per_hour, c.name AS court_name
-       FROM bookings b
-       JOIN courts c ON b.court_id = c.id
-       WHERE b.status = 'confirmed'
-       AND NOW() > ADDTIME(DATE(b.date), b.end_time)`
-    );
-
-    for (const b of bookings) {
-      const now = new Date();
-      // FIX: use buildDateTime so MySQL DATETIME field parses correctly
-      const bookingEnd    = buildDateTime(b.date, b.end_time);
-      const gracePeriodMs = 15 * 60 * 1000;
-
-      // Always apply 15-minute grace period regardless of next slot
-      const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
-
-      if (now > penaltyThreshold) {
-        const penaltyAmount = b.price_per_hour;
-        const reason = `Auto-completed: Did not check out from ${b.court_name}. Exceeded 15-minute grace period.`;
-
-        await pool.query(
-          `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
-          [penaltyAmount, b.user_id]
-        );
-
-        await pool.query(
-          `INSERT INTO penalties (user_id, booking_id, type, description, amount, resolved)
-           VALUES (?, ?, 'late_checkout', ?, ?, 0)`,
-          [b.user_id, b.id, reason, penaltyAmount]
-        );
-
-        await createNotification(
-          b.user_id,
-          'Late Checkout Penalty',
-          `You did not check out from ${b.court_name} on time. A penalty of ${penaltyAmount} coins will be charged on your next booking.`
-        );
-
-        // Check late checkout count — suspend if 2 or more
-        const [[lateCount]] = await pool.query(
-          `SELECT COUNT(*) AS cnt FROM penalties
-           WHERE user_id = ? AND type = 'late_checkout' AND resolved = 0`,
-          [b.user_id]
-        );
-
-        if (lateCount.cnt >= 2) {
-          const suspendUntil = new Date();
-          suspendUntil.setDate(suspendUntil.getDate() + 7);
-          const suspReason = `Suspended for 7 days due to ${lateCount.cnt} late checkouts.`;
-
-          await pool.query(
-            `UPDATE users SET suspended_until = ?, suspension_reason = ? WHERE id = ?`,
-            [suspendUntil, suspReason, b.user_id]
-          );
-
-          await createNotification(
-            b.user_id,
-            'Account Suspended',
-            `Your account has been suspended for 7 days due to repeated late checkouts (${lateCount.cnt} times). You can appeal this decision on the suspension page.`
-          );
-        }
-      }
-
-      await pool.query(
-        `UPDATE bookings SET status = 'completed' WHERE id = ?`,
-        [b.id]
-      );
-    }
-
-    res.json({ message: 'Auto-complete executed', completed: bookings.length });
-  } catch (err) {
-    console.error('❌ Auto-complete error:', err);
-    res.status(500).json({ error: err.message });
-  }
+  res.json({ message: 'Auto-complete is disabled. Checkout is handled manually.' });
 };
 
 /* ============================

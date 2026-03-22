@@ -12,7 +12,7 @@ router.post('/cancel/:id', auth, bookingController.cancelBooking);
 router.post('/checkout/:id', auth, bookingController.checkOut);
 
 // CRON job endpoints (no auth needed for cron)
-router.post('/auto-complete', bookingController.autoComplete);
+// auto-complete removed — checkout is manual only
 router.post('/auto-no-show', bookingController.autoNoShow);
 
 // Admin endpoint for QR check-in (moved to admin routes - but keeping here for compatibility)
