@@ -9,11 +9,9 @@ const { createNotification } = require('../utils/notificationUtils');
  * YYYY-MM-DD part before combining with the time.
  */
 function buildDateTime(dateField, timeStr) {
-  // Raw string slice — no timezone conversion, works on any server timezone.
-  // MySQL DATETIME arrives as "2026-03-22T00:00:00.000Z" or "2026-03-22 00:00:00"
-  // Either way slice(0,10) gives the stored YYYY-MM-DD date correctly.
-  const raw      = (dateField instanceof Date) ? dateField.toISOString() : String(dateField);
-  const datePart = raw.slice(0, 10);
+  const datePart = (dateField instanceof Date)
+    ? dateField.toISOString().slice(0, 10)
+    : String(dateField).slice(0, 10);
   return new Date(`${datePart}T${timeStr}`);
 }
 
@@ -355,13 +353,13 @@ exports.checkOut = async (req, res) => {
     const bookingEnd = buildDateTime(booking.date, booking.end_time);
     const now = new Date();
 
-    // 10-minute grace period after booking end time
+    // Always apply 15-minute grace period regardless of next slot
     const gracePeriodMs    = 10 * 60 * 1000;
     const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
 
     if (now > penaltyThreshold) {
       const penaltyAmount = booking.price_per_hour;
-      const lateReason = `Late checkout from ${booking.court_name}. Exceeded 10-minute grace period.`;
+      const reason = `Late checkout from ${booking.court_name}. Exceeded 15-minute grace period.`;
 
       await pool.query(
         `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
@@ -371,7 +369,7 @@ exports.checkOut = async (req, res) => {
       await pool.query(
         `INSERT INTO penalties (user_id, booking_id, type, description, amount, resolved)
          VALUES (?, ?, 'late_checkout', ?, ?, 0)`,
-        [booking.user_id, bookingId, lateReason, penaltyAmount]
+        [booking.user_id, bookingId, reason, penaltyAmount]
       );
 
       await createNotification(
@@ -390,11 +388,11 @@ exports.checkOut = async (req, res) => {
       if (lateCount.cnt >= 2) {
         const suspendUntil = new Date();
         suspendUntil.setDate(suspendUntil.getDate() + 7);
-        const suspReason = `Suspended for 7 days due to ${lateCount.cnt} late checkouts.`;
+        const reason = `Suspended for 7 days due to ${lateCount.cnt} late checkouts.`;
 
         await pool.query(
           `UPDATE users SET suspended_until = ?, suspension_reason = ? WHERE id = ?`,
-          [suspendUntil, suspReason, booking.user_id]
+          [suspendUntil, reason, booking.user_id]
         );
 
         await createNotification(
@@ -412,7 +410,7 @@ exports.checkOut = async (req, res) => {
       return res.json({
         message: 'Checked out with late penalty',
         penalty_applied: penaltyAmount,
-        reason: lateReason
+        reason
       });
     }
 
@@ -429,13 +427,87 @@ exports.checkOut = async (req, res) => {
 };
 
 /* ============================
-   AUTO COMPLETE — REMOVED
-   Bookings are only completed via manual admin checkout or QR scanner.
-   Auto-complete was causing false late-checkout penalties for users
-   who checked out on time or early.
+   AUTO COMPLETE (CRON)
 ============================ */
 exports.autoComplete = async (req, res) => {
-  res.json({ message: 'Auto-complete is disabled. Checkout is handled manually.' });
+  try {
+    // FIX: ADDTIME(DATE(b.date), b.end_time) instead of CONCAT(b.date, ' ', b.end_time)
+    // CONCAT breaks because the date column is DATETIME, producing an invalid string.
+    const [bookings] = await pool.query(
+      `SELECT b.id, b.user_id, b.court_id, b.date, b.end_time,
+              c.price_per_hour, c.name AS court_name
+       FROM bookings b
+       JOIN courts c ON b.court_id = c.id
+       WHERE b.status = 'confirmed'
+       AND NOW() > ADDTIME(DATE(b.date), b.end_time)`
+    );
+
+    for (const b of bookings) {
+      const now = new Date();
+      // FIX: use buildDateTime so MySQL DATETIME field parses correctly
+      const bookingEnd    = buildDateTime(b.date, b.end_time);
+      const gracePeriodMs = 15 * 60 * 1000;
+
+      // Always apply 15-minute grace period regardless of next slot
+      const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
+
+      if (now > penaltyThreshold) {
+        const penaltyAmount = b.price_per_hour;
+        const reason = `Auto-completed: Did not check out from ${b.court_name}. Exceeded 15-minute grace period.`;
+
+        await pool.query(
+          `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
+          [penaltyAmount, b.user_id]
+        );
+
+        await pool.query(
+          `INSERT INTO penalties (user_id, booking_id, type, description, amount, resolved)
+           VALUES (?, ?, 'late_checkout', ?, ?, 0)`,
+          [b.user_id, b.id, reason, penaltyAmount]
+        );
+
+        await createNotification(
+          b.user_id,
+          'Late Checkout Penalty',
+          `You did not check out from ${b.court_name} on time. A penalty of ${penaltyAmount} coins will be charged on your next booking.`
+        );
+
+        // Check late checkout count — suspend if 2 or more
+        const [[lateCount]] = await pool.query(
+          `SELECT COUNT(*) AS cnt FROM penalties
+           WHERE user_id = ? AND type = 'late_checkout' AND resolved = 0`,
+          [b.user_id]
+        );
+
+        if (lateCount.cnt >= 2) {
+          const suspendUntil = new Date();
+          suspendUntil.setDate(suspendUntil.getDate() + 7);
+          const suspReason = `Suspended for 7 days due to ${lateCount.cnt} late checkouts.`;
+
+          await pool.query(
+            `UPDATE users SET suspended_until = ?, suspension_reason = ? WHERE id = ?`,
+            [suspendUntil, suspReason, b.user_id]
+          );
+
+          await createNotification(
+            b.user_id,
+            'Account Suspended',
+            `Your account has been suspended for 7 days due to repeated late checkouts (${lateCount.cnt} times). You can appeal this decision on the suspension page.`
+          );
+        }
+      }
+
+      await pool.query(
+        `UPDATE bookings SET status = 'completed' WHERE id = ?`,
+        [b.id]
+      );
+    }
+
+    res.json({ message: 'Auto-complete executed', completed: bookings.length });
+  } catch (err) {
+    console.error('❌ Auto-complete error:', err);
+    res.status(500).json({ error: err.message });
+  }
 };
 
 /* ============================
@@ -508,13 +580,9 @@ exports.confirmBooking = async (req, res) => {
       return res.status(404).json({ error: "Booking not found or already confirmed" });
     }
 
-    // BOTH sides use raw string slice — no timezone conversion at all.
-    // booking.date from MySQL = "2026-03-22T00:00:00.000Z" → slice(0,10) = "2026-03-22"
-    // todayStr: manually add UTC+7 offset so "today" is Bangkok local date on any server.
-    const rawDate        = (booking.date instanceof Date) ? booking.date.toISOString() : String(booking.date);
-    const bookingDateStr = rawDate.slice(0, 10);
-    const bangkokNow     = new Date(Date.now() + 7 * 60 * 60 * 1000);
-    const todayStr       = bangkokNow.toISOString().slice(0, 10);
+    // Use buildDateTime to safely extract the date part regardless of MySQL DATETIME format
+    const bookingDateStr = String(booking.date).slice(0, 10); // "YYYY-MM-DD"
+    const todayStr = new Date().toLocaleDateString('en-CA');  // "YYYY-MM-DD" in local time
 
     if (bookingDateStr < todayStr) {
       return res.status(400).json({ error: "Cannot confirm past bookings" });
