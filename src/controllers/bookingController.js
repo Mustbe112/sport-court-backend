@@ -497,7 +497,7 @@ exports.autoComplete = async (req, res) => {
        FROM bookings b
        JOIN courts c ON b.court_id = c.id
        WHERE b.status = 'confirmed'
-       AND NOW() > ADDTIME(DATE(b.date), b.end_time)`
+       AND NOW() > TIMESTAMP(DATE(b.date), b.end_time)`
     );
 
     for (const b of bookings) {
@@ -576,20 +576,27 @@ exports.autoNoShow = async (req, res) => {
     console.log('🔍 Checking for no-shows at:', nowBangkok().toISOString());
 
     // FIX: ADDTIME(DATE(b.date), b.start_time) instead of CONCAT(b.date, ' ', b.start_time)
+    // Use TIMESTAMP(date, time) + INTERVAL to combine date + time columns explicitly.
+    // Log NOW() and a sample booking's cutoff so we can debug timezone mismatches.
+    const [[dbNow]] = await pool.query(`SELECT NOW() AS now, @@global.time_zone AS tz, @@session.time_zone AS sess_tz`);
+    console.log(`[noShow] DB NOW()=${dbNow.now} | global_tz=${dbNow.tz} | session_tz=${dbNow.sess_tz}`);
+
     const [bookings] = await pool.query(
       `SELECT b.id, b.user_id, b.total_price, b.date, b.start_time, b.checked_in,
-              b.court_id, c.price_per_hour, c.name AS court_name
+              b.court_id, c.price_per_hour, c.name AS court_name,
+              NOW() AS db_now,
+              TIMESTAMP(DATE(b.date), b.start_time) + INTERVAL 45 MINUTE AS cutoff_time
        FROM bookings b
        JOIN courts c ON b.court_id = c.id
        WHERE b.status = 'booked'
        AND b.checked_in = FALSE
-       AND NOW() > DATE_ADD(
-         ADDTIME(DATE(b.date), b.start_time),
-         INTERVAL 45 MINUTE
-       )`
+       AND NOW() > TIMESTAMP(DATE(b.date), b.start_time) + INTERVAL 45 MINUTE`
     );
 
     console.log(`📊 Found ${bookings.length} no-show bookings`);
+    if (bookings.length > 0) {
+      bookings.forEach(b => console.log(`  → booking #${b.id} start=${b.start_time} cutoff=${b.cutoff_time} db_now=${b.db_now}`));
+    }
 
     for (const b of bookings) {
       console.log(`⚠️ Marking booking #${b.id} as no-show`);
