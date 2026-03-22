@@ -2,17 +2,41 @@ const pool = require('../config/db');
 const { generateQRCode, generatePDF } = require("../utils/bookingUtils");
 const { createNotification } = require('../utils/notificationUtils');
 
+// Bangkok is always UTC+7, no DST
+const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000;
+
 /**
- * Safely build a JS Date from a MySQL date field + a time string.
- * MySQL DATETIME columns come back as full ISO strings like
- * "2026-02-01T00:00:00.000Z", so we always extract just the
- * YYYY-MM-DD part before combining with the time.
+ * Current time in Bangkok (UTC+7).
+ * Use this everywhere instead of new Date() so all comparisons are
+ * in the same timezone as the booking times stored in the DB.
+ */
+function nowBangkok() {
+  return new Date(Date.now() + BANGKOK_OFFSET_MS);
+}
+
+/**
+ * Build a Bangkok-local Date from a MySQL date field + a HH:MM[:SS] time string.
+ * MySQL DATE/DATETIME columns arrive as "2026-03-22T00:00:00.000Z" or "2026-03-22".
+ * We extract only the YYYY-MM-DD part and combine it with the time, treating the
+ * result as a UTC timestamp that represents Bangkok local time
+ * (i.e. we store the wall-clock time directly, with no TZ conversion).
  */
 function buildDateTime(dateField, timeStr) {
   const datePart = (dateField instanceof Date)
     ? dateField.toISOString().slice(0, 10)
     : String(dateField).slice(0, 10);
-  return new Date(`${datePart}T${timeStr}`);
+  // Normalise to HH:MM:SS
+  const raw = String(timeStr).slice(0, 8);
+  const timePart = raw.length === 5 ? raw + ':00' : raw; // "HH:MM" -> "HH:MM:00"
+  // Treat as Bangkok wall-clock time stored as if it were UTC
+  return new Date(`${datePart}T${timePart}Z`);
+}
+
+/**
+ * Today's date string (YYYY-MM-DD) in Bangkok time.
+ */
+function todayBangkok() {
+  return new Date(Date.now() + BANGKOK_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 /* ============================
@@ -207,7 +231,7 @@ exports.createBooking = async (req, res) => {
     // Check if user is suspended
     if (user.suspended_until) {
       const suspendedUntil = new Date(user.suspended_until);
-      const now = new Date();
+      const now = nowBangkok();
       if (suspendedUntil > now) {
         await conn.rollback();
         return res.status(403).json({
@@ -349,17 +373,34 @@ exports.checkOut = async (req, res) => {
       return res.status(404).json({ message: 'Booking not found or not confirmed' });
     }
 
-    // FIX: use buildDateTime so MySQL DATETIME field parses correctly
     const bookingEnd = buildDateTime(booking.date, booking.end_time);
-    const now = new Date();
+    const now = nowBangkok();
 
-    // Always apply 15-minute grace period regardless of next slot
-    const gracePeriodMs    = 10 * 60 * 1000;
-    const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
+    // Early checkout: user leaves before end_time — always fine, never penalise
+    if (now <= bookingEnd) {
+      await pool.query(
+        `UPDATE bookings SET status = 'completed' WHERE id = ?`,
+        [bookingId]
+      );
+      return res.json({ message: 'Checked out successfully (early checkout)' });
+    }
 
-    if (now > penaltyThreshold) {
+    // Within 10-minute grace period after end_time — no penalty
+    const GRACE_MS         = 10 * 60 * 1000;
+    const penaltyThreshold = new Date(bookingEnd.getTime() + GRACE_MS);
+
+    if (now <= penaltyThreshold) {
+      await pool.query(
+        `UPDATE bookings SET status = 'completed' WHERE id = ?`,
+        [bookingId]
+      );
+      return res.json({ message: 'Checked out successfully' });
+    }
+
+    // Past grace period — apply late penalty
+    {
       const penaltyAmount = booking.price_per_hour;
-      const reason = `Late checkout from ${booking.court_name}. Exceeded 15-minute grace period.`;
+      const reason = `Late checkout from ${booking.court_name}. Exceeded 10-minute grace period.`;
 
       await pool.query(
         `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
@@ -386,7 +427,7 @@ exports.checkOut = async (req, res) => {
       );
 
       if (lateCount.cnt >= 2) {
-        const suspendUntil = new Date();
+        const suspendUntil = nowBangkok();
         suspendUntil.setDate(suspendUntil.getDate() + 7);
         const reason = `Suspended for 7 days due to ${lateCount.cnt} late checkouts.`;
 
@@ -414,13 +455,6 @@ exports.checkOut = async (req, res) => {
       });
     }
 
-    await pool.query(
-      `UPDATE bookings SET status = 'completed' WHERE id = ?`,
-      [bookingId]
-    );
-
-    res.json({ message: 'Checked out successfully' });
-
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -443,13 +477,13 @@ exports.autoComplete = async (req, res) => {
     );
 
     for (const b of bookings) {
-      const now = new Date();
+      const now = nowBangkok();
       // FIX: use buildDateTime so MySQL DATETIME field parses correctly
       const bookingEnd    = buildDateTime(b.date, b.end_time);
-      const gracePeriodMs = 15 * 60 * 1000;
+      const GRACE_MS = 10 * 60 * 1000; // Must match checkOut grace period
 
-      // Always apply 15-minute grace period regardless of next slot
-      const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
+      // Apply 10-minute grace period (consistent with manual checkout)
+      const penaltyThreshold = new Date(bookingEnd.getTime() + GRACE_MS);
 
       if (now > penaltyThreshold) {
         const penaltyAmount = b.price_per_hour;
@@ -480,7 +514,7 @@ exports.autoComplete = async (req, res) => {
         );
 
         if (lateCount.cnt >= 2) {
-          const suspendUntil = new Date();
+          const suspendUntil = nowBangkok();
           suspendUntil.setDate(suspendUntil.getDate() + 7);
           const suspReason = `Suspended for 7 days due to ${lateCount.cnt} late checkouts.`;
 
@@ -515,7 +549,7 @@ exports.autoComplete = async (req, res) => {
 ============================ */
 exports.autoNoShow = async (req, res) => {
   try {
-    console.log('🔍 Checking for no-shows at:', new Date().toISOString());
+    console.log('🔍 Checking for no-shows at:', nowBangkok().toISOString());
 
     // FIX: ADDTIME(DATE(b.date), b.start_time) instead of CONCAT(b.date, ' ', b.start_time)
     const [bookings] = await pool.query(
@@ -527,7 +561,7 @@ exports.autoNoShow = async (req, res) => {
        AND b.checked_in = FALSE
        AND NOW() > DATE_ADD(
          ADDTIME(DATE(b.date), b.start_time),
-         INTERVAL 15 MINUTE
+         INTERVAL 45 MINUTE
        )`
     );
 
@@ -580,12 +614,32 @@ exports.confirmBooking = async (req, res) => {
       return res.status(404).json({ error: "Booking not found or already confirmed" });
     }
 
-    // Use buildDateTime to safely extract the date part regardless of MySQL DATETIME format
-    const bookingDateStr = String(booking.date).slice(0, 10); // "YYYY-MM-DD"
-    const todayStr = new Date().toLocaleDateString('en-CA');  // "YYYY-MM-DD" in local time
+    const now = nowBangkok();
+    const bookingStart = buildDateTime(booking.date, booking.start_time);
+    const bookingEnd   = buildDateTime(booking.date, booking.end_time);
 
+    // Block check-in for bookings on a past date (not today)
+    const bookingDateStr = String(booking.date).slice(0, 10);
+    const todayStr = todayBangkok();
     if (bookingDateStr < todayStr) {
-      return res.status(400).json({ error: "Cannot confirm past bookings" });
+      return res.status(400).json({ error: "Cannot check in for past bookings" });
+    }
+
+    // Allow check-in from 30 minutes BEFORE start time
+    const earliestCheckIn = new Date(bookingStart.getTime() - 30 * 60 * 1000);
+    if (now < earliestCheckIn) {
+      const minutesUntil = Math.ceil((earliestCheckIn - now) / 60000);
+      return res.status(400).json({
+        error: `Check-in opens 30 minutes before your booking. Please come back in ${minutesUntil} minute(s).`
+      });
+    }
+
+    // Block check-in after the 45-minute no-show window has passed
+    const noShowCutoff = new Date(bookingStart.getTime() + 45 * 60 * 1000);
+    if (now > noShowCutoff) {
+      return res.status(400).json({
+        error: "Check-in window has closed. You missed the 45-minute check-in window."
+      });
     }
 
     const qrText = `BOOKING-${booking.id}`;
