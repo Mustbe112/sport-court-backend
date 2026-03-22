@@ -4,14 +4,21 @@ const { createNotification } = require('../utils/notificationUtils');
 
 /**
  * Safely build a JS Date from a MySQL date field + a time string.
- * MySQL DATETIME columns come back as full ISO strings like
- * "2026-02-01T00:00:00.000Z", so we always extract just the
- * YYYY-MM-DD part before combining with the time.
+ *
+ * MySQL DATETIME columns arrive as full ISO strings like
+ * "2026-03-21T00:00:00.000Z". Using .toISOString() gives the UTC date
+ * which is WRONG for Bangkok (UTC+7) — a booking on Mar 22 00:30 Bangkok
+ * is stored as Mar 21 17:30 UTC, so slice(0,10) returns "2026-03-21",
+ * making penaltyThreshold land in the past and treating every checkout
+ * as late.
+ *
+ * Fix: use toLocaleDateString('en-CA') which returns "YYYY-MM-DD" in the
+ * server's local timezone (Bangkok), matching what was actually booked.
  */
 function buildDateTime(dateField, timeStr) {
-  const datePart = (dateField instanceof Date)
-    ? dateField.toISOString().slice(0, 10)
-    : String(dateField).slice(0, 10);
+  const d = (dateField instanceof Date) ? dateField : new Date(dateField);
+  // en-CA locale gives "YYYY-MM-DD" in local time — timezone-safe
+  const datePart = d.toLocaleDateString('en-CA');
   return new Date(`${datePart}T${timeStr}`);
 }
 
@@ -349,17 +356,21 @@ exports.checkOut = async (req, res) => {
       return res.status(404).json({ message: 'Booking not found or not confirmed' });
     }
 
-    // FIX: use buildDateTime so MySQL DATETIME field parses correctly
+    // buildDateTime now uses local timezone (Bangkok) so date is always correct
     const bookingEnd = buildDateTime(booking.date, booking.end_time);
     const now = new Date();
 
-    // Always apply 15-minute grace period regardless of next slot
-    const gracePeriodMs    = 10 * 60 * 1000;
-    const penaltyThreshold = new Date(bookingEnd.getTime() + gracePeriodMs);
+    // Penalty only applies if the user checks out MORE than 10 minutes
+    // AFTER their scheduled end_time.
+    // Checking out early or on time = no penalty, regardless of start time.
+    const GRACE_PERIOD_MS  = 10 * 60 * 1000; // 10 minutes
+    const penaltyThreshold = new Date(bookingEnd.getTime() + GRACE_PERIOD_MS);
 
-    if (now > penaltyThreshold) {
+    const isLate = now > penaltyThreshold;
+
+    if (isLate) {
       const penaltyAmount = booking.price_per_hour;
-      const reason = `Late checkout from ${booking.court_name}. Exceeded 15-minute grace period.`;
+      const lateReason = `Late checkout from ${booking.court_name}. Exceeded 10-minute grace period after booking end time.`;
 
       await pool.query(
         `UPDATE users SET penalty = penalty + ? WHERE id = ?`,
@@ -369,7 +380,7 @@ exports.checkOut = async (req, res) => {
       await pool.query(
         `INSERT INTO penalties (user_id, booking_id, type, description, amount, resolved)
          VALUES (?, ?, 'late_checkout', ?, ?, 0)`,
-        [booking.user_id, bookingId, reason, penaltyAmount]
+        [booking.user_id, bookingId, lateReason, penaltyAmount]
       );
 
       await createNotification(
@@ -378,7 +389,7 @@ exports.checkOut = async (req, res) => {
         `You checked out late from ${booking.court_name}. A penalty of ${penaltyAmount} coins (1-hour court fee) will be charged on your next booking.`
       );
 
-      // Check late checkout count — suspend if 2 or more
+      // Suspend after 2 unresolved late checkouts
       const [[lateCount]] = await pool.query(
         `SELECT COUNT(*) AS cnt FROM penalties
          WHERE user_id = ? AND type = 'late_checkout' AND resolved = 0`,
@@ -388,11 +399,11 @@ exports.checkOut = async (req, res) => {
       if (lateCount.cnt >= 2) {
         const suspendUntil = new Date();
         suspendUntil.setDate(suspendUntil.getDate() + 7);
-        const reason = `Suspended for 7 days due to ${lateCount.cnt} late checkouts.`;
+        const suspReason = `Suspended for 7 days due to ${lateCount.cnt} late checkouts.`;
 
         await pool.query(
           `UPDATE users SET suspended_until = ?, suspension_reason = ? WHERE id = ?`,
-          [suspendUntil, reason, booking.user_id]
+          [suspendUntil, suspReason, booking.user_id]
         );
 
         await createNotification(
@@ -410,10 +421,11 @@ exports.checkOut = async (req, res) => {
       return res.json({
         message: 'Checked out with late penalty',
         penalty_applied: penaltyAmount,
-        reason
+        reason: lateReason
       });
     }
 
+    // On-time or early checkout — no penalty
     await pool.query(
       `UPDATE bookings SET status = 'completed' WHERE id = ?`,
       [bookingId]
@@ -506,9 +518,9 @@ exports.confirmBooking = async (req, res) => {
       return res.status(404).json({ error: "Booking not found or already confirmed" });
     }
 
-    // Use buildDateTime to safely extract the date part regardless of MySQL DATETIME format
-    const bookingDateStr = String(booking.date).slice(0, 10); // "YYYY-MM-DD"
-    const todayStr = new Date().toLocaleDateString('en-CA');  // "YYYY-MM-DD" in local time
+    // Use local timezone date comparison (en-CA = YYYY-MM-DD in local time)
+    const bookingDateStr = new Date(booking.date).toLocaleDateString('en-CA');
+    const todayStr       = new Date().toLocaleDateString('en-CA');
 
     if (bookingDateStr < todayStr) {
       return res.status(400).json({ error: "Cannot confirm past bookings" });
