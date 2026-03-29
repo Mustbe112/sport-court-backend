@@ -147,4 +147,68 @@ router.delete("/me", auth, async (req, res) => {
   }
 });
 
+// POST /api/users/report-request — User requests a report
+router.post('/report-request', auth, async (req, res) => {
+  const userId = req.user.id;
+  try {
+    // Check if user already has a pending request
+    const [[existing]] = await pool.query(
+      "SELECT id FROM report_requests WHERE user_id = ? AND status = 'pending'",
+      [userId]
+    );
+    if (existing) {
+      return res.status(400).json({ message: 'You already have a pending report request. Please wait for admin to send it.' });
+    }
+
+    // Check if a report was already sent recently (within 24h) — optional throttle
+    const [[recentSent]] = await pool.query(
+      "SELECT id FROM report_requests WHERE user_id = ? AND status = 'sent' AND sent_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)",
+      [userId]
+    );
+    if (recentSent) {
+      return res.status(400).json({ message: 'A report was already sent to you within the last 24 hours.' });
+    }
+
+    await pool.query(
+      'INSERT INTO report_requests (user_id) VALUES (?)',
+      [userId]
+    );
+
+    // Notify admin via admin notifications table
+    await pool.query(
+      `INSERT INTO notifications (user_id, title, message)
+       VALUES (
+         (SELECT id FROM users WHERE role = 'admin' LIMIT 1),
+         'New Report Request',
+         CONCAT('A user has requested their activity report. Check Users > Report Requests in the admin panel.')
+       )`
+    );
+
+    res.json({ message: 'Report request submitted. Admin will send it shortly.' });
+  } catch (err) {
+    console.error('Report request error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/users/report-status — User polls their own report status
+router.get('/report-status', auth, async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [[row]] = await pool.query(
+      `SELECT status, requested_at, sent_at
+       FROM report_requests
+       WHERE user_id = ?
+       ORDER BY requested_at DESC
+       LIMIT 1`,
+      [userId]
+    );
+    if (!row) return res.json({ status: 'none' });
+    res.json(row);
+  } catch (err) {
+    console.error('Report status error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

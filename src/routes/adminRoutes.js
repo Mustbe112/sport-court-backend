@@ -56,6 +56,8 @@ router.post('/appeals/:id/resolve', adminController.resolveAppeal);
 // Reports
 router.get('/reports', adminController.getReportData);
 router.get('/reports/user-activity', adminController.getUserActivity);
+router.get('/report-requests', adminController.getReportRequests);
+router.post('/report-requests/:id/send', adminController.sendReportToUser);
 
 // Test
 router.get('/test', (req, res) => {

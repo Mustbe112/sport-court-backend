@@ -965,3 +965,52 @@ exports.getUserActivity = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+// GET all pending report requests (admin view)
+exports.getReportRequests = async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT rr.id, rr.user_id, rr.status, rr.requested_at, rr.sent_at,
+              u.name, u.email, u.coin_balance, u.created_at AS member_since
+       FROM report_requests rr
+       JOIN users u ON u.id = rr.user_id
+       ORDER BY rr.status ASC, rr.requested_at DESC`
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+ 
+// POST /admin/report-requests/:id/send — Admin marks request as sent + notifies user
+exports.sendReportToUser = async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Get the request
+    const [[rr]] = await pool.query(
+      'SELECT * FROM report_requests WHERE id = ?', [id]
+    );
+    if (!rr) return res.status(404).json({ message: 'Report request not found' });
+    if (rr.status === 'sent') return res.status(400).json({ message: 'Report already sent' });
+ 
+    // Mark as sent
+    await pool.query(
+      'UPDATE report_requests SET status = "sent", sent_at = NOW() WHERE id = ?',
+      [id]
+    );
+ 
+    // Send in-app notification to user — special type "report_ready" so frontend can detect it
+    await pool.query(
+      `INSERT INTO notifications (user_id, title, message)
+       VALUES (?, ?, ?)`,
+      [
+        rr.user_id,
+        'Your Activity Report is Ready',
+        'REPORT_READY: Your requested activity report is now available. Click here to download it from your profile page.'
+      ]
+    );
+ 
+    res.json({ message: 'Report notification sent to user' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
