@@ -14,7 +14,7 @@ const app = express();
 
 // Add this BEFORE your routes
 app.use(cors({
-  origin: 'https://sportcourt-booking-management-syste.vercel.app/', // Or specify your frontend domain
+  origin: 'https://sportcourt-booking-management-syste.vercel.app', // Or specify your frontend domain
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
